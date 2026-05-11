@@ -38,8 +38,8 @@ from albumentations.pytorch import ToTensorV2
 # #############################################################################
 # CONFIGURATION  (matches step1_exploration.py)
 # #############################################################################
-DATASET_ROOT = r"C:\Users\Arman Srivastava\Desktop\Pillai Project\archive\brisc2025"
-OUTPUT_DIR   = r"outputs"
+DATASET_ROOT = os.environ.get("DATASET_ROOT", r"C:\Users\Arman Srivastava\Desktop\Pillai Project\archive\brisc2025")
+OUTPUT_DIR   = os.environ.get("OUTPUT_DIR", "outputs")
 
 IMG_SIZE     = 256
 BATCH_SIZE   = 16
