@@ -196,36 +196,41 @@ Input (3, 256, 256)
 
 ## Results
 
-### Overall Performance
+### Overall Performance (Table 7)
 
-| Method | Pixel Acc. | Macro F1 | Mean IoU | Dice (All) | Dice (Tumor) | ROC-AUC |
+| Model | Pix. Acc. (%) | Macro F1 | Wtd. F1 | Dice (Tumor) | mIoU | ROC-AUC |
 |---|---|---|---|---|---|---|
-| Weighted CE | **0.998** | 0.781 | 0.723 | 0.812 | 0.681 | 0.921 |
-| Focal + Dice | 0.994 | **0.843** | **0.796** | **0.867** | 0.791 | 0.957 |
-| **Multi-task** | 0.995 | 0.839 | 0.792 | 0.863 | **0.796** | **0.961** |
+| CE (baseline) | **99.21** | 0.431 | 0.985† | 0.357 | 0.421 | 0.871 |
+| Focal+Dice | 98.84 | 0.612 | 0.982 | 0.604 | 0.574 | 0.921 |
+| **Multi-Task (MT)** | 98.94 | **0.628** | 0.983 | **0.624** | **0.589** | **0.934** |
 
-### Per-Class Dice Scores
+> † Weighted F1 dominated by background class; clinically uninformative.
 
-| Method | Background | Glioma | Meningioma | Pituitary |
-|---|---|---|---|---|
-| Weighted CE | 0.997 | 0.724 | 0.691 | 0.627 |
-| Focal + Dice | 0.993 | 0.813 | **0.786** | 0.774 |
-| **Multi-task** | 0.993 | **0.818** | 0.781 | **0.789** |
+### Per-Class Dice & IoU (Table 8)
 
-### Surface Distance Metrics (px ≈ mm)
+| Model | Dice BG | Dice Glioma | Dice Mening. | Dice Pituit. | IoU BG | IoU Glioma | IoU Mening. | IoU Pituit. |
+|---|---|---|---|---|---|---|---|---|
+| CE (baseline) | 0.992 | 0.521 | 0.398 | 0.152 | 0.984 | 0.352 | 0.249 | 0.082 |
+| Focal+Dice | 0.988 | 0.713 | 0.618 | 0.481 | 0.976 | 0.554 | 0.448 | 0.316 |
+| **Multi-Task** | 0.989 | **0.728** | **0.631** | **0.513** | 0.978 | **0.572** | **0.461** | **0.345** |
 
-| Method | HD95 Glioma | HD95 Mening. | HD95 Pituit. | ASD (avg) | Vol. Sim. |
+### Boundary Accuracy (Table 9, pixels)
+
+| Class | Model | HD | HD95 | ASD | Vol. Sim. |
 |---|---|---|---|---|---|
-| Weighted CE | 14.2 | 16.5 | 21.3 | 4.72 | 0.831 |
-| Focal + Dice | 8.6 | 10.1 | 12.8 | 2.94 | 0.903 |
-| **Multi-task** | **8.1** | **9.7** | **11.6** | **2.81** | **0.911** |
+| Glioma | F+D | 38.4 | 18.7 | 4.21 | 0.881 |
+| Glioma | **MT** | **35.1** | **16.2** | **3.84** | **0.904** |
+| Meningioma | F+D | 51.6 | 26.3 | 6.78 | 0.843 |
+| Meningioma | **MT** | **48.9** | **23.8** | **6.14** | **0.861** |
+| Pituitary | F+D | 62.3 | 34.7 | 9.12 | 0.712 |
+| Pituitary | **MT** | **54.8** | **28.1** | **7.63** | **0.762** |
 
-### Architecture Comparison (Focal+Dice Loss)
+### Architecture Ablation (Table 10, Focal+Dice Loss)
 
-| Architecture | Tumor Dice | Pituitary Dice | Params (M) | Inference (ms) |
-|---|---|---|---|---|
-| Single-Head UNet + SCSE | 0.791 | 0.774 | 20.2 | 18.3 |
-| **Dual-Head UNet + SCSE** | **0.796** | **0.789** | 20.9 | 19.1 |
+| Model | Dice (Tumor) | Pituit. Dice | Macro F1 | HD95 | ASD | ROC-AUC |
+|---|---|---|---|---|---|---|
+| Single-Head | 0.604 | 0.481 | 0.612 | 26.6 | 6.70 | 0.921 |
+| **Dual-Head (MT)** | **0.624** | **0.513** | **0.628** | **22.7** | **5.87** | **0.934** |
 
 ---
 
