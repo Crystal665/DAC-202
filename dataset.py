@@ -35,9 +35,6 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 
-# #############################################################################
-# CONFIGURATION  (matches step1_exploration.py)
-# #############################################################################
 DATASET_ROOT = os.environ.get("DATASET_ROOT", r"C:\Users\Arman Srivastava\Desktop\Pillai Project\archive\brisc2025")
 OUTPUT_DIR   = os.environ.get("OUTPUT_DIR", "outputs")
 
@@ -49,22 +46,18 @@ NUM_CLASSES  = 4
 
 CLASS_NAMES  = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
 CLASS_COLORS_RGB = {
-    0: (0,   0,   0),     # black
-    1: (255, 0,   0),     # red
-    2: (0,   255, 0),     # green
-    3: (0,   0,   255),   # blue
+    0: (0,   0,   0),
+    1: (255, 0,   0),
+    2: (0,   255, 0),
+    3: (0,   0,   255),
 }
 
-# ImageNet normalization (for pretrained EfficientNet-B4 encoder)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-# #############################################################################
-# FILE DISCOVERY  (same logic as step1_exploration.py section1_structure)
-# #############################################################################
 def discover_pairs(root_dir):
     """
     Scan the BRISC dataset for (image, mask) pairs.
@@ -81,7 +74,6 @@ def discover_pairs(root_dir):
         print(f"[ERROR] Dataset root not found: {root}")
         sys.exit(1)
 
-    # Automatically dive into segmentation_task if present
     seg_task_dir = root / "segmentation_task"
     if seg_task_dir.exists():
         scan_root = seg_task_dir
@@ -95,7 +87,6 @@ def discover_pairs(root_dir):
     image_paths = []
     mask_paths  = []
 
-    # Collect files from 'images/' and 'masks/' directories
     for dirpath, dirnames, filenames in os.walk(scan_root):
         p = Path(dirpath)
         if p.name.lower() == "images":
@@ -107,7 +98,6 @@ def discover_pairs(root_dir):
                 if f.is_file() and f.suffix.lower() in mask_exts:
                     mask_paths.append(f)
 
-    # Fallback: generic rglob if no 'images'/'masks' dirs found
     if not image_paths:
         print("[INFO] No 'images' directories found. Falling back to full scan...")
         for f in scan_root.rglob("*"):
@@ -119,8 +109,6 @@ def discover_pairs(root_dir):
                 else:
                     image_paths.append(f)
 
-    # Pair by tier (train/test) + stem
-    # tier = parent.parent.name  (e.g., 'train' or 'test')
     mask_lookup = {}
     for mp in mask_paths:
         tier = mp.parent.parent.name
@@ -139,9 +127,6 @@ def discover_pairs(root_dir):
     return matched
 
 
-# #############################################################################
-# 3-CHANNEL INPUT  (same as step1_exploration.py _make_3ch)
-# #############################################################################
 def build_3channel(image_bgr):
     """
     Build 3-channel input from a BGR image:
@@ -150,25 +135,18 @@ def build_3channel(image_bgr):
         Ch3: Sobel gradient magnitude
     Returns: numpy array of shape (H, W, 3), dtype uint8
     """
-    # Channel 1 - Grayscale
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
-    # Channel 2 - CLAHE enhanced
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     ch_clahe = clahe.apply(gray)
 
-    # Channel 3 - Sobel edge magnitude (matches step1_exploration)
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     ch_edges = np.uint8(np.clip(np.sqrt(sobelx**2 + sobely**2), 0, 255))
 
-    # Stack into (H, W, 3)
     return np.stack([gray, ch_clahe, ch_edges], axis=-1)
 
 
-# #############################################################################
-# MASK READING HELPER  (same as step1_exploration.py mask logic)
-# #############################################################################
 def read_mask(mask_path):
     """
     Read a multiclass mask and snap all pixel values to valid class labels.
@@ -199,18 +177,9 @@ def read_mask(mask_path):
     if mask.ndim == 3:
         mask = mask[:, :, 0]
 
-    # Snap artifact pixels to nearest valid class {0,1,2,3}
-    # Values 0-3:   already correct
-    # Values 4-127: nearest class = min(round(v/85)*1, 3) -> but realistically
-    #               these are border bleeds between adjacent low classes, so
-    #               clamp to 3 as upper bound using clip.
-    # Values 128-255: artifact near 255 (white border fill) -> snap to 0 (background)
-    #                 because 255 was used as a white background sentinel in some
-    #                 BRISC annotation tools, not a valid class index.
     mask = mask.astype(np.uint8)
-    # Build a lookup table: index = raw pixel value, value = snapped class
     lut = _build_mask_lut()
-    mask = lut[mask]   # vectorized remap via numpy fancy indexing
+    mask = lut[mask]
     return mask
 
 
@@ -230,25 +199,19 @@ def _build_mask_lut():
     valid = np.array([0, 1, 2, 3], dtype=np.int32)
     for v in range(256):
         if v <= 3:
-            lut[v] = v        # already valid
+            lut[v] = v
         elif v <= 127:
-            # Small artifact: snap to nearest valid class by distance
             dists = np.abs(valid - v)
             lut[v] = valid[np.argmin(dists)]
         else:
-            # High-value artifact (248-255 white-border fill): background
             lut[v] = 0
     return lut
 
 
-# #############################################################################
-# AUGMENTATION PIPELINES
-# #############################################################################
 def get_train_transforms(img_size=IMG_SIZE):
     """Augmentation pipeline for training set."""
     return A.Compose([
         A.Resize(img_size, img_size),
-        # Spatial augmentations (applied identically to image and mask)
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
         A.RandomRotate90(p=0.5),
@@ -258,9 +221,7 @@ def get_train_transforms(img_size=IMG_SIZE):
             p=0.3,
         ),
         A.GridDistortion(p=0.3),
-        # Pixel-level augmentation (image only, not mask)
         A.RandomBrightnessContrast(p=0.2),
-        # Normalize with ImageNet stats
         A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ToTensorV2(),
     ])
@@ -275,9 +236,6 @@ def get_val_transforms(img_size=IMG_SIZE):
     ])
 
 
-# #############################################################################
-# PYTORCH DATASET
-# #############################################################################
 class BRISCDataset(Dataset):
     """
     PyTorch Dataset for BRISC brain tumor segmentation.
@@ -303,24 +261,19 @@ class BRISCDataset(Dataset):
     def __getitem__(self, idx):
         img_path, mask_path = self.pairs[idx]
 
-        # Load image (BGR)
         img_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
         if img_bgr is None:
             raise IOError(f"Could not read image: {img_path}")
 
-        # Build 3-channel input: [gray, clahe, sobel_edges]
         image_3ch = build_3channel(img_bgr)
 
-        # Load multiclass mask (values 0,1,2,3)
         mask = read_mask(mask_path)
 
-        # Apply augmentations / transforms
         if self.transform:
             transformed = self.transform(image=image_3ch, mask=mask)
-            image_tensor = transformed["image"]   # (3, H, W) float32
-            mask_tensor  = transformed["mask"]     # (H, W) - may be float after interp
+            image_tensor = transformed["image"]
+            mask_tensor  = transformed["mask"]
         else:
-            # Fallback: manual resize + tensor conversion
             image_3ch = cv2.resize(image_3ch, (IMG_SIZE, IMG_SIZE))
             mask = cv2.resize(mask, (IMG_SIZE, IMG_SIZE),
                               interpolation=cv2.INTER_NEAREST)
@@ -329,15 +282,11 @@ class BRISCDataset(Dataset):
             )
             mask_tensor = torch.from_numpy(mask)
 
-        # Ensure mask is long (int64) for CrossEntropyLoss
         mask_tensor = mask_tensor.long()
 
         return image_tensor, mask_tensor
 
 
-# #############################################################################
-# STRATIFIED SPLIT  (same logic as step1_exploration.py section6)
-# #############################################################################
 def _assign_stratification_label(mask_path, images_with):
     """
     Determine stratification label for splitting.
@@ -373,9 +322,6 @@ def _compute_images_with(pairs):
     return dict(images_with)
 
 
-# #############################################################################
-# RMIF CLASS WEIGHTS LOADER
-# #############################################################################
 def load_class_weights(weights_path=None):
     """
     Load RMIF class weights from the JSON file produced by step1_exploration.
@@ -398,9 +344,6 @@ def load_class_weights(weights_path=None):
     return weights
 
 
-# #############################################################################
-# DATALOADER FACTORY
-# #############################################################################
 def create_dataloaders(root_dir=DATASET_ROOT,
                        batch_size=BATCH_SIZE,
                        num_workers=NUM_WORKERS,
@@ -416,19 +359,16 @@ def create_dataloaders(root_dir=DATASET_ROOT,
         print("[ERROR] No image-mask pairs found.")
         sys.exit(1)
 
-    # Compute per-class image counts for stratification
     print("\nComputing class frequencies for stratified split...")
     images_with = _compute_images_with(pairs)
     for c in range(NUM_CLASSES):
         print(f"  {CLASS_NAMES[c]:12s}: {images_with.get(c, 0)} images")
 
-    # Assign stratification labels (rarest tumor class per image)
     strat_labels = [
         _assign_stratification_label(mask_path, images_with)
         for _, mask_path in pairs
     ]
 
-    # 80% train, 20% temp
     indices = list(range(len(pairs)))
     try:
         train_idx, temp_idx = train_test_split(
@@ -459,12 +399,10 @@ def create_dataloaders(root_dir=DATASET_ROOT,
     print(f"  test  : {len(test_pairs)}")
     print(f"  total : {len(pairs)}")
 
-    # Create datasets with appropriate transforms
     train_dataset = BRISCDataset(train_pairs, transform=get_train_transforms())
     val_dataset   = BRISCDataset(val_pairs,   transform=get_val_transforms())
     test_dataset  = BRISCDataset(test_pairs,  transform=get_val_transforms())
 
-    # Create DataLoaders
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True, drop_last=False,
@@ -481,9 +419,6 @@ def create_dataloaders(root_dir=DATASET_ROOT,
     return train_loader, val_loader, test_loader, pairs
 
 
-# #############################################################################
-# COLORIZE MASK  (same as step1_exploration.py _colorize_mask)
-# #############################################################################
 def colorize_mask(mask_np):
     """Return RGB colorized mask (H, W, 3) from class-label mask (H, W)."""
     colored = np.zeros((*mask_np.shape, 3), dtype=np.uint8)
@@ -492,9 +427,6 @@ def colorize_mask(mask_np):
     return colored
 
 
-# #############################################################################
-# SANITY CHECKS
-# #############################################################################
 def run_sanity_checks(train_loader, val_loader, test_loader, total_pairs):
     """Print dataset statistics and visualize one sample."""
     print("\n" + "=" * 60)
@@ -509,7 +441,6 @@ def run_sanity_checks(train_loader, val_loader, test_loader, total_pairs):
     print(f"  val         : {val_n}")
     print(f"  test        : {test_n}")
 
-    # Grab one batch from train
     images, masks = next(iter(train_loader))
 
     print(f"\nImage tensor:")
@@ -524,7 +455,6 @@ def run_sanity_checks(train_loader, val_loader, test_loader, total_pairs):
     unique_vals = torch.unique(masks).tolist()
     print(f"  unique : {unique_vals}")
 
-    # Verify normalization range (ImageNet: roughly [-2.1, 2.6])
     if images.min() < -3.0 or images.max() > 3.5:
         print("  [!] Image values look unusual - check normalization")
     else:
@@ -536,15 +466,12 @@ def run_sanity_checks(train_loader, val_loader, test_loader, total_pairs):
     else:
         print(f"  [!] Mask has unexpected values outside {expected_classes}")
 
-    # Load class weights
     weights = load_class_weights()
 
-    # Visualization: one sample - 3 channels + colorized mask
     print("\nGenerating sanity check visualization...")
-    img = images[0]   # (3, H, W)
-    msk = masks[0]    # (H, W)
+    img = images[0]
+    msk = masks[0]
 
-    # Denormalize for display
     mean = torch.tensor(IMAGENET_MEAN).view(3, 1, 1)
     std  = torch.tensor(IMAGENET_STD).view(3, 1, 1)
     img_denorm = img * std + mean
@@ -558,13 +485,11 @@ def run_sanity_checks(train_loader, val_loader, test_loader, total_pairs):
         axes[i].set_title(ch_names[i], fontsize=12, fontweight="bold")
         axes[i].axis("off")
 
-    # Colorized mask
     mask_colored = colorize_mask(msk.numpy())
     axes[3].imshow(mask_colored)
     axes[3].set_title(ch_names[3], fontsize=12, fontweight="bold")
     axes[3].axis("off")
 
-    # Legend
     patches = [mpatches.Patch(color=np.array(CLASS_COLORS_RGB[c]) / 255.0,
                               label=CLASS_NAMES[c]) for c in range(NUM_CLASSES)]
     fig.legend(handles=patches, loc="lower center", ncol=4, fontsize=10,
@@ -582,9 +507,6 @@ def run_sanity_checks(train_loader, val_loader, test_loader, total_pairs):
     print("=" * 60)
 
 
-# #############################################################################
-# MAIN
-# #############################################################################
 if __name__ == "__main__":
     print("=" * 60)
     print("  Brain Tumor Segmentation - Dataset & DataLoader Pipeline")

@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend for saving; switch to TkAgg if you want pop-ups
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from PIL import Image
@@ -24,20 +24,17 @@ from sklearn.model_selection import train_test_split
 
 warnings.filterwarnings("ignore")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION  ← edit this
-# ─────────────────────────────────────────────────────────────────────────────
-DATASET_ROOT = r"C:\Users\Arman Srivastava\Desktop\Pillai Project\archive\brisc2025"          # Root folder containing classification_task & segmentation_task
+DATASET_ROOT = r"C:\Users\Arman Srivastava\Desktop\Pillai Project\archive\brisc2025"
 OUTPUT_DIR   = r"outputs"
 RANDOM_SEED  = 42
-SAMPLE_STATS = 100                        # images to sample for pixel-stat analysis
+SAMPLE_STATS = 100
 
 CLASS_NAMES  = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
-CLASS_COLORS = {                          # BGR for OpenCV overlays
+CLASS_COLORS = {
     0: (0,   0,   0),
-    1: (0,   0, 255),   # red
-    2: (0, 255,   0),   # green
-    3: (255, 0,   0),   # blue
+    1: (0,   0, 255),
+    2: (0, 255,   0),
+    3: (255, 0,   0),
 }
 CLASS_COLORS_RGB = {k: (v[2], v[1], v[0]) for k, v in CLASS_COLORS.items()}
 
@@ -45,9 +42,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPER
-# ─────────────────────────────────────────────────────────────────────────────
 def sep(title=""):
     print("\n" + "=" * 60)
     if title:
@@ -55,9 +49,6 @@ def sep(title=""):
         print("-" * 60)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 1 – Dataset Structure Exploration
-# ─────────────────────────────────────────────────────────────────────────────
 def section1_structure(dataset_root):
     sep("SECTION 1 * Dataset Structure Exploration")
 
@@ -66,7 +57,6 @@ def section1_structure(dataset_root):
         print(f"[ERROR] Dataset root not found: {root}")
         sys.exit(1)
 
-    # Automatically dive into 'segmentation_task' if present
     seg_task_dir = root / "segmentation_task"
     if seg_task_dir.exists():
         print(f"-> Found 'segmentation_task' directory. Focusing scan there.")
@@ -74,7 +64,6 @@ def section1_structure(dataset_root):
     else:
         scan_root = root
 
-    # Walk and print folder tree (2 levels deep to keep it readable)
     print(f"\nScanning structure starting at: {scan_root.name}")
     for dirpath, dirnames, filenames in os.walk(scan_root):
         rel = Path(dirpath).relative_to(scan_root)
@@ -90,14 +79,12 @@ def section1_structure(dataset_root):
             if len(valid_files) > 3:
                 print(f"{indent}  ... ({len(valid_files)} files)")
 
-    # Find all 'images' and 'masks' directories
     img_exts = {".jpg", ".jpeg", ".png"}
-    mask_exts = {".png", ".jpg"} # Masks are .png but let's be safe
+    mask_exts = {".png", ".jpg"}
 
     image_paths = []
     mask_paths = []
 
-    # Search recursively for 'images' directories and pull their contents
     for dirpath, dirnames, filenames in os.walk(scan_root):
         p = Path(dirpath)
         if p.name.lower() == 'images':
@@ -109,7 +96,6 @@ def section1_structure(dataset_root):
                 if f.is_file() and f.suffix.lower() in mask_exts:
                     mask_paths.append(f)
 
-    # If no specific folders found, fall back to generic rglob
     if not image_paths:
         print("\n[INFO] No 'images' directories found. Falling back to full scan...")
         all_files = list(scan_root.rglob("*"))
@@ -124,20 +110,15 @@ def section1_structure(dataset_root):
     print(f"\nTotal raw image files located : {len(image_paths)}")
     print(f"Total raw mask files located  : {len(mask_paths)}")
 
-    # Accurate Pairing: Use folder context and stem
-    # Map by absolute path stem so we can keep train/test separation during matching
     matched = []
     unmatched_imgs = []
 
-    # Create lookup for masks by their folder tier and filename stem
-    # e.g., "train/brisc2025_train_00001"
     mask_lookup = {}
     for mp in mask_paths:
-        tier = mp.parent.parent.name  # usually 'train' or 'test'
+        tier = mp.parent.parent.name
         key = f"{tier}_{mp.stem}"
         mask_lookup[key] = mp
 
-    # Match images against masks
     for ip in image_paths:
         tier = ip.parent.parent.name
         key = f"{tier}_{ip.stem}"
@@ -146,7 +127,6 @@ def section1_structure(dataset_root):
         else:
             unmatched_imgs.append(ip)
 
-    # Count unmatched masks
     img_lookup_keys = {f"{ip.parent.parent.name}_{ip.stem}" for ip in image_paths}
     unmatched_masks = [mp for mp in mask_paths if f"{mp.parent.parent.name}_{mp.stem}" not in img_lookup_keys]
 
@@ -164,9 +144,6 @@ def section1_structure(dataset_root):
     return matched, unmatched_imgs, unmatched_masks
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 2 – Image Property Analysis
-# ─────────────────────────────────────────────────────────────────────────────
 def section2_image_properties(matched):
     sep("SECTION 2 * Image Property Analysis")
 
@@ -211,15 +188,12 @@ def section2_image_properties(matched):
     return sizes, corrupted
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 3 – Mask Analysis
-# ─────────────────────────────────────────────────────────────────────────────
 def section3_mask_analysis(matched):
     sep("SECTION 3 * Mask Analysis")
 
     C = 4
-    pixel_counts  = defaultdict(int)   # class → pixel count
-    images_with   = defaultdict(int)   # class → #images containing it
+    pixel_counts  = defaultdict(int)
+    images_with   = defaultdict(int)
     pure_bg_count = 0
     all_unique_vals = set()
     unexpected_flag = []
@@ -262,7 +236,6 @@ def section3_mask_analysis(matched):
     else:
         print("  [!] Unexpected values detected!")
 
-    # RMIF weights: wc = sqrt(N_total) / (sqrt(C) * sqrt(N_c))
     weights = {}
     print(f"\n{'Class':<12} {'Name':<12} {'Pixels':>14} {'%':>7} {'RMIF Weight':>12} {'#Images':>8}")
     print("-" * 70)
@@ -279,7 +252,6 @@ def section3_mask_analysis(matched):
         for p, v in unexpected_flag[:5]:
             print(f"  {p} -> {v}")
 
-    # Save weights
     weights_named = {CLASS_NAMES[c]: weights[c] for c in range(C)}
     weights_named["_raw_by_index"] = weights
     out_path = os.path.join(OUTPUT_DIR, "class_weights.json")
@@ -290,9 +262,6 @@ def section3_mask_analysis(matched):
     return pixel_counts, weights, images_with, pure_bg_count, unexpected_flag
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 4 – Visual Sanity Check
-# ─────────────────────────────────────────────────────────────────────────────
 def _colorize_mask(mask):
     """Return RGB colorized mask (H,W,3)."""
     colored = np.zeros((*mask.shape, 3), dtype=np.uint8)
@@ -335,7 +304,6 @@ def section4_visual_sanity(matched):
         except Exception as e:
             print(f"  [WARN] Could not process {img_path.name}: {e}")
 
-    # Legend
     patches = [mpatches.Patch(color=np.array(CLASS_COLORS_RGB[c])/255,
                                label=CLASS_NAMES[c]) for c in range(4)]
     fig.legend(handles=patches, loc="lower center", ncol=4, fontsize=10,
@@ -349,9 +317,6 @@ def section4_visual_sanity(matched):
     print(f"Saved -> {out}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 5 – 3-Channel Input Preview
-# ─────────────────────────────────────────────────────────────────────────────
 def _make_3ch(img_bgr):
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -402,9 +367,6 @@ def section5_three_channel_preview(matched):
     print(f"Saved -> {out}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 6 – Train / Validation / Test Split
-# ─────────────────────────────────────────────────────────────────────────────
 def _assign_label(img_path, mask_path, images_with):
     """Rarest tumor class present in the image (fallback: 0 = background)."""
     try:
@@ -416,7 +378,6 @@ def _assign_label(img_path, mask_path, images_with):
         present = [c for c in [1, 2, 3] if (mask == c).any()]
         if not present:
             return 0, []
-        # rarest = smallest images_with count
         rarest = min(present, key=lambda c: images_with.get(c, 0))
         return rarest, present
     except Exception:
@@ -439,7 +400,6 @@ def section6_split(matched, images_with):
     df = pd.DataFrame(records)
     labels = df["strat_label"].tolist()
 
-    # First split: 80% train, 20% temp
     try:
         train_idx, temp_idx = train_test_split(
             range(len(df)), test_size=0.20, stratify=labels, random_state=RANDOM_SEED)
@@ -480,9 +440,6 @@ def section6_split(matched, images_with):
     return df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 7 – Summary Report
-# ─────────────────────────────────────────────────────────────────────────────
 def section7_summary(matched, unmatched_imgs, unmatched_masks,
                      sizes, corrupted, pixel_counts, weights,
                      images_with, pure_bg_count, unexpected_flag, df_splits):
@@ -544,12 +501,11 @@ def section7_summary(matched, unmatched_imgs, unmatched_masks,
 
     print("+---------------------------------------------+")
 
-    # Bar chart of class pixel distribution
     fig, ax = plt.subplots(figsize=(8, 4))
     xs = [CLASS_NAMES[c] for c in range(C)]
     ys = [pixel_counts[c] for c in range(C)]
     colors = [np.array(CLASS_COLORS_RGB[c]) / 255.0 for c in range(C)]
-    colors[0] = np.array([0.4, 0.4, 0.4])  # background → grey for visibility
+    colors[0] = np.array([0.4, 0.4, 0.4])
     bars = ax.bar(xs, ys, color=colors, edgecolor="white", linewidth=1.2)
     for bar, val in zip(bars, ys):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
@@ -564,9 +520,6 @@ def section7_summary(matched, unmatched_imgs, unmatched_masks,
     print(f"\nDistribution chart saved -> {out}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 60)
     print("  Brain Tumor Segmentation - Step 1: Data Exploration")
@@ -574,29 +527,22 @@ def main():
     print(f"  Output dir   : {OUTPUT_DIR}")
     print("=" * 60)
 
-    # Section 1
     matched, unmatched_imgs, unmatched_masks = section1_structure(DATASET_ROOT)
     if not matched:
         print("[ERROR] No matched image-mask pairs found. Check DATASET_ROOT and naming convention.")
         sys.exit(1)
 
-    # Section 2
     sizes, corrupted = section2_image_properties(matched)
 
-    # Section 3
     pixel_counts, weights, images_with, pure_bg_count, unexpected_flag = \
         section3_mask_analysis(matched)
 
-    # Section 4
     section4_visual_sanity(matched)
 
-    # Section 5
     section5_three_channel_preview(matched)
 
-    # Section 6
     df_splits = section6_split(matched, images_with)
 
-    # Section 7
     section7_summary(matched, unmatched_imgs, unmatched_masks,
                      sizes, corrupted, pixel_counts, weights,
                      images_with, pure_bg_count, unexpected_flag, df_splits)

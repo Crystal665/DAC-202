@@ -112,9 +112,6 @@ def count_class_pixels(loader):
     return counts.tolist()
 
 
-# #############################################################################
-# TRAIN / VALIDATE
-# #############################################################################
 def train_one_epoch(model, loader, seg_fn, optimizer, device, cfg, epoch):
     model.train()
     seg_losses, cls_losses, total_losses = [], [], []
@@ -179,9 +176,6 @@ def validate(model, loader, seg_fn, device, cfg, collect_roc=False):
     return np.mean(total_losses), np.mean(seg_losses), np.mean(cls_losses), cls_acc, metrics.get_metrics()
 
 
-# #############################################################################
-# VISUALIZATION
-# #############################################################################
 def _colorize(m):
     c = np.zeros((*m.shape, 3), dtype=np.uint8)
     for k, rgb in CLASS_COLORS_RGB.items(): c[m == k] = rgb
@@ -243,9 +237,6 @@ def plot_confusion_matrix(cm, path):
     plt.tight_layout(); plt.savefig(path, dpi=150); plt.close()
 
 
-# #############################################################################
-# MAIN TRAINING
-# #############################################################################
 def train_multitask(quick=False):
     cfg = CONFIG.copy()
     if quick:
@@ -357,7 +348,6 @@ def train_multitask(quick=False):
 
     plot_curves(dict(history), os.path.join(cfg["output_dir"], "training_curves.png"))
 
-    # --- Test ---
     print("\n" + "=" * 65 + "\n  TEST EVALUATION\n" + "=" * 65)
     if os.path.exists(best_path):
         ck = torch.load(best_path, map_location=device, weights_only=False)
@@ -390,10 +380,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     train_multitask(quick=args.quick)
 
-# Kaggle usage:
-# import os, sys
-# os.environ["DATASET_ROOT"] = "/kaggle/input/datasets/briscdataset/brisc2025/brisc2025"
-# os.environ["OUTPUT_DIR"]   = "/kaggle/working/outputs"
-# sys.path.insert(0, "/kaggle/working/project")
-# from train_multitask import train_multitask
-# train_multitask(quick=False)

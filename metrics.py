@@ -18,7 +18,6 @@ class SegmentationMetrics:
     def __init__(self, num_classes=NUM_CLASSES):
         self.num_classes = num_classes
         self.cm = np.zeros((num_classes, num_classes), dtype=np.int64)
-        # For ROC-AUC: collect subsampled probabilities
         self.roc_probs = []
         self.roc_labels = []
         self.max_roc_pixels = 100_000
@@ -42,10 +41,10 @@ class SegmentationMetrics:
         """Collect subsampled pixel probabilities for ROC-AUC."""
         if len(self.roc_probs) * 1000 > self.max_roc_pixels:
             return
-        p = probs.cpu().numpy()   # (B, C, H, W)
-        t = targets.cpu().numpy() # (B, H, W)
+        p = probs.cpu().numpy()
+        t = targets.cpu().numpy()
         B, C, H, W = p.shape
-        p = p.transpose(0, 2, 3, 1).reshape(-1, C)  # (N, C)
+        p = p.transpose(0, 2, 3, 1).reshape(-1, C)
         t = t.reshape(-1)
         n = len(t)
         k = max(1, int(n * sample_rate))
@@ -60,10 +59,8 @@ class SegmentationMetrics:
         if total == 0:
             return self._empty_metrics()
 
-        # Overall pixel accuracy
         accuracy = np.diag(cm).sum() / total
 
-        # Per-class metrics
         per_class = {}
         f1_list, support_list = [], []
         for c in range(self.num_classes):
@@ -88,17 +85,14 @@ class SegmentationMetrics:
             f1_list.append(f1)
             support_list.append(support)
 
-        # Macro and weighted F1
         macro_f1 = np.mean(f1_list)
         total_support = sum(support_list)
         weighted_f1 = sum(f * s for f, s in zip(f1_list, support_list)) / (total_support + 1e-8)
 
-        # Mean Dice / IoU (exclude background for tumor-focused metric)
         mean_dice = np.mean([per_class[c]["dice"] for c in range(self.num_classes)])
         mean_dice_tumor = np.mean([per_class[c]["dice"] for c in range(1, self.num_classes)])
         mean_iou = np.mean([per_class[c]["iou"] for c in range(self.num_classes)])
 
-        # ROC-AUC
         roc_auc = self._compute_roc_auc()
 
         return {

@@ -27,22 +27,15 @@ import torch.nn as nn
 import segmentation_models_pytorch as smp
 
 
-# #############################################################################
-# CONFIGURATION
-# #############################################################################
 NUM_CLASSES       = 4
 ENCODER_NAME      = "efficientnet-b4"
 ENCODER_WEIGHTS   = "imagenet"
 IN_CHANNELS       = 3
 IMG_SIZE          = 256
-ENCODER_OUT_CH    = 1792   # efficientnet-b4 last stage output channels
 
 CLASS_NAMES = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
 
 
-# #############################################################################
-# DUAL-HEAD UNET MODEL
-# #############################################################################
 class DualHeadUNet(nn.Module):
     """UNet with two output heads: segmentation + classification.
 
@@ -56,7 +49,6 @@ class DualHeadUNet(nn.Module):
     def __init__(self, device):
         super().__init__()
 
-        # Build the base UNet (we'll use its encoder + seg decoder)
         self.unet = smp.Unet(
             encoder_name=ENCODER_NAME,
             encoder_weights=ENCODER_WEIGHTS,
@@ -66,26 +58,25 @@ class DualHeadUNet(nn.Module):
             decoder_attention_type="scse",
         )
 
-        # Convenience accessors (match model.py interface)
         self.encoder = self.unet.encoder
         self.decoder = self.unet.decoder
         self.segmentation_head = self.unet.segmentation_head
 
-        # Classification head: GAP -> Dropout -> FC
+        enc_out_ch = self.encoder.out_channels[-1]
+        print(f"  Encoder last stage channels: {enc_out_ch}")
+
         self.cls_head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),        # (B, 1792, H, W) -> (B, 1792, 1, 1)
-            nn.Flatten(),                   # (B, 1792)
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
             nn.Dropout(0.3),
-            nn.Linear(ENCODER_OUT_CH, 128),
+            nn.Linear(enc_out_ch, 128),
             nn.ReLU(inplace=True),
             nn.Dropout(0.2),
-            nn.Linear(128, NUM_CLASSES),    # (B, 4) raw logits
+            nn.Linear(128, NUM_CLASSES),
         )
 
-        # Move to device
         self.to(device)
 
-        # Freeze encoder by default
         self.freeze_encoder()
 
     def forward(self, x):
@@ -98,15 +89,10 @@ class DualHeadUNet(nn.Module):
             seg_logits: (B, 4, H, W) segmentation logits
             cls_logits: (B, 4) classification logits
         """
-        # Encoder forward (list of feature maps at different scales)
+        seg_logits = self.unet(x)
+
         features = self.encoder(x)
-
-        # Segmentation head: decoder + final conv
-        decoder_out = self.decoder(features)
-        seg_logits = self.segmentation_head(decoder_out)
-
-        # Classification head: use deepest encoder features (last element)
-        deepest = features[-1]  # (B, 1792, 8, 8) for 256x256 input
+        deepest = features[-1]
         cls_logits = self.cls_head(deepest)
 
         return seg_logits, cls_logits
@@ -122,9 +108,6 @@ class DualHeadUNet(nn.Module):
             param.requires_grad = True
 
 
-# #############################################################################
-# FACTORY FUNCTION
-# #############################################################################
 def get_multitask_model(device):
     """Create a DualHeadUNet with frozen encoder.
 
@@ -137,9 +120,6 @@ def get_multitask_model(device):
     return DualHeadUNet(device)
 
 
-# #############################################################################
-# INFERENCE HELPERS
-# #############################################################################
 def predict_mask(model, image_tensor, device):
     """Run segmentation inference.
 
@@ -177,9 +157,6 @@ def get_class_masks(pred_mask):
     )
 
 
-# #############################################################################
-# CLASSIFICATION LABEL EXTRACTION
-# #############################################################################
 def derive_cls_label(mask_tensor):
     """Derive per-image classification label from segmentation mask.
 
@@ -198,7 +175,6 @@ def derive_cls_label(mask_tensor):
 
     for i in range(B):
         m = mask_tensor[i]
-        # Count pixels per tumor class (1, 2, 3)
         tumor_counts = torch.zeros(NUM_CLASSES, dtype=torch.long,
                                    device=mask_tensor.device)
         for c in range(1, NUM_CLASSES):
@@ -206,17 +182,13 @@ def derive_cls_label(mask_tensor):
 
         total_tumor = tumor_counts[1:].sum()
         if total_tumor > 0:
-            # Most frequent tumor class
             labels[i] = torch.argmax(tumor_counts[1:]).item() + 1
         else:
-            labels[i] = 0  # no tumor
+            labels[i] = 0
 
     return labels
 
 
-# #############################################################################
-# SANITY CHECK
-# #############################################################################
 if __name__ == "__main__":
     print("=" * 60)
     print("  model_multitask.py - DualHeadUNet Sanity Check")
@@ -249,8 +221,8 @@ if __name__ == "__main__":
 
     print("\nDerive cls labels...")
     fake_mask = torch.zeros(2, IMG_SIZE, IMG_SIZE, dtype=torch.long).to(device)
-    fake_mask[0, 50:100, 50:100] = 1  # glioma region
-    fake_mask[1, 30:80, 30:80] = 3    # pituitary region
+    fake_mask[0, 50:100, 50:100] = 1
+    fake_mask[1, 30:80, 30:80] = 3
     labels = derive_cls_label(fake_mask)
     print(f"Labels: {labels.tolist()}  (expected: [1, 3])")
     assert labels.tolist() == [1, 3]

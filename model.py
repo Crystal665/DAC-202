@@ -34,21 +34,15 @@ import torch
 import segmentation_models_pytorch as smp
 
 
-# #############################################################################
-# CONFIGURATION
-# #############################################################################
 NUM_CLASSES    = 4
 ENCODER_NAME   = "efficientnet-b4"
 ENCODER_WEIGHTS = "imagenet"
-IN_CHANNELS    = 3       # matches 3-channel preprocessing from dataset.py
+IN_CHANNELS    = 3
 IMG_SIZE       = 256
 
 CLASS_NAMES = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
 
 
-# #############################################################################
-# MODEL FACTORY
-# #############################################################################
 def get_model(device):
     """
     Instantiate UNet with EfficientNet-B4 encoder + SCSE attention decoder.
@@ -65,21 +59,17 @@ def get_model(device):
         encoder_weights=ENCODER_WEIGHTS,
         in_channels=IN_CHANNELS,
         classes=NUM_CLASSES,
-        activation=None,              # raw logits - NO softmax
-        decoder_attention_type="scse", # Spatial & Channel Squeeze-Excitation
+        activation=None,
+        decoder_attention_type="scse",
     )
 
     model = model.to(device)
 
-    # Freeze encoder by default (unfreeze after epoch 5)
     freeze_encoder(model)
 
     return model
 
 
-# #############################################################################
-# FREEZE / UNFREEZE ENCODER
-# #############################################################################
 def freeze_encoder(model):
     """
     Freeze all encoder parameters so only the decoder trains.
@@ -98,9 +88,6 @@ def unfreeze_encoder(model):
         param.requires_grad = True
 
 
-# #############################################################################
-# INFERENCE
-# #############################################################################
 def predict_mask(model, image_tensor, device):
     """
     Run inference and return predicted class labels.
@@ -119,15 +106,12 @@ def predict_mask(model, image_tensor, device):
     model.eval()
     with torch.no_grad():
         image_tensor = image_tensor.to(device)
-        logits = model(image_tensor)            # (B, 4, H, W)
-        probs  = torch.softmax(logits, dim=1)   # (B, 4, H, W)
-        preds  = torch.argmax(probs, dim=1)     # (B, H, W)
-    return preds  # int64, values in {0, 1, 2, 3}
+        logits = model(image_tensor)
+        probs  = torch.softmax(logits, dim=1)
+        preds  = torch.argmax(probs, dim=1)
+    return preds
 
 
-# #############################################################################
-# PER-CLASS BINARY MASKS
-# #############################################################################
 def get_class_masks(pred_mask):
     """
     Extract per-class binary masks from an argmax label map.
@@ -148,9 +132,6 @@ def get_class_masks(pred_mask):
     return no_tumor_mask, glioma_mask, meningioma_mask, pituitary_mask
 
 
-# #############################################################################
-# SANITY CHECK
-# #############################################################################
 if __name__ == "__main__":
     print("=" * 60)
     print("  model.py - UNet + EfficientNet-B4 Sanity Check")
@@ -159,10 +140,8 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nDevice: {device}")
 
-    # Build model (encoder frozen by default)
     model = get_model(device)
 
-    # Parameter counts
     total     = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen    = total - trainable
@@ -170,7 +149,6 @@ if __name__ == "__main__":
     print(f"Trainable params: {trainable:,}")
     print(f"Frozen params:    {frozen:,}")
 
-    # Forward pass with dummy input
     print("\nRunning forward pass...")
     dummy = torch.randn(2, 3, IMG_SIZE, IMG_SIZE).to(device)
     logits = model(dummy)
@@ -180,7 +158,6 @@ if __name__ == "__main__":
     print(f"Logits dtype: {logits.dtype}")
     print(f"Logits range: [{logits.min().item():.4f}, {logits.max().item():.4f}]")
 
-    # Inference (softmax + argmax)
     print("\nRunning inference (softmax -> argmax)...")
     preds = predict_mask(model, dummy, device)
     assert preds.shape == (2, IMG_SIZE, IMG_SIZE), \
@@ -192,7 +169,6 @@ if __name__ == "__main__":
     print(f"Preds dtype: {preds.dtype}")
     print(f"Unique predicted classes: {unique_vals}")
 
-    # Per-class binary masks
     print("\nExtracting per-class masks...")
     masks = get_class_masks(preds)
     mask_names = ["no_tumor", "glioma", "meningioma", "pituitary"]
@@ -204,7 +180,6 @@ if __name__ == "__main__":
         print(f"  {name}_mask: shape={m.shape}, dtype={m.dtype}, "
               f"sum={m.sum().item():.0f}")
 
-    # Test unfreeze
     print("\nTesting unfreeze_encoder()...")
     unfreeze_encoder(model)
     trainable_after = sum(p.numel() for p in model.parameters() if p.requires_grad)

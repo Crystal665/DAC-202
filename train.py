@@ -32,32 +32,26 @@ from model import get_model, freeze_encoder, unfreeze_encoder
 from loss import compute_rmif_weights, get_loss_fn
 from metrics import SegmentationMetrics, print_metrics
 
-# #############################################################################
-# CONFIGURATION
-# #############################################################################
 CONFIG = {
     "seed": 42,
     "epochs": 50,
     "batch_size": 16,
     "lr": 1e-3,
-    "encoder_lr_factor": 0.01,    # 100x lower LR for encoder (was 0.1)
+    "encoder_lr_factor": 0.01,
     "unfreeze_epoch": 5,
     "weight_decay": 1e-4,
-    "cosine_T0": 10,              # restart LR every 10 epochs
-    "cosine_T_mult": 2,           # double restart period each cycle
-    "early_stop_patience": 15,    # more patience (was 10)
+    "cosine_T0": 10,
+    "cosine_T_mult": 2,
+    "early_stop_patience": 15,
     "grad_clip_norm": 1.0,
     "val_split": 0.1,
     "num_workers": 2,
-    "dice_loss_weight": 0.5,      # combined loss = focal + 0.5 * dice_loss
+    "dice_loss_weight": 0.5,
     "output_dir": "outputs/baseline_focal_dice",
     "viz_every_n": 5,
 }
 
 
-# #############################################################################
-# REPRODUCIBILITY
-# #############################################################################
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -68,9 +62,6 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-# #############################################################################
-# EARLY STOPPING (monitors tumor Dice - higher is better)
-# #############################################################################
 class EarlyStopping:
     """Monitor tumor Dice (higher=better) instead of val_loss.
     Val_loss is dominated by background pixels and can increase even while
@@ -86,16 +77,13 @@ class EarlyStopping:
         if self.best_score is None or tumor_dice > self.best_score + self.min_delta:
             self.best_score = tumor_dice
             self.counter = 0
-            return True  # improved
+            return True
         self.counter += 1
         if self.counter >= self.patience:
             self.should_stop = True
-        return False  # did not improve
+        return False
 
 
-# #############################################################################
-# CSV LOGGER
-# #############################################################################
 class CSVLogger:
     def __init__(self, filepath, fieldnames):
         self.filepath = filepath
@@ -108,14 +96,10 @@ class CSVLogger:
             csv.DictWriter(f, self.fieldnames).writerow(row)
 
 
-# #############################################################################
-# DATA PREPARATION
-# #############################################################################
 def prepare_data(cfg, quick=False):
     """Discover pairs, split train/val/test, build dataloaders."""
     all_pairs = discover_pairs(DATASET_ROOT)
 
-    # Separate by tier (train vs test folder)
     train_pairs = [(i, m) for i, m in all_pairs if "train" in i.lower()]
     test_pairs = [(i, m) for i, m in all_pairs if "test" in i.lower()]
     print(f"  Raw split: {len(train_pairs)} train, {len(test_pairs)} test")
@@ -125,7 +109,6 @@ def prepare_data(cfg, quick=False):
         train_pairs = train_pairs[:100]
         test_pairs = test_pairs[:30]
 
-    # Split train into train/val
     random.shuffle(train_pairs)
     n_val = max(1, int(len(train_pairs) * cfg["val_split"]))
     val_pairs = train_pairs[:n_val]
@@ -154,29 +137,22 @@ def count_class_pixels(loader):
     return counts.tolist()
 
 
-# #############################################################################
-# DICE LOSS (complements Focal Loss for direct spatial overlap optimization)
-# #############################################################################
 def dice_loss(logits, targets, num_classes=NUM_CLASSES, smooth=1.0):
     """Soft Dice Loss averaged over classes (excluding background).
     Focal Loss optimizes per-pixel classification but doesn't directly
     maximize spatial overlap. Dice Loss fills that gap by pushing the model
     to produce contiguous, correctly-shaped tumor regions."""
-    probs = torch.softmax(logits, dim=1)  # (B, C, H, W)
-    targets_oh = F.one_hot(targets, num_classes).permute(0, 3, 1, 2).float()  # (B, C, H, W)
+    probs = torch.softmax(logits, dim=1)
+    targets_oh = F.one_hot(targets, num_classes).permute(0, 3, 1, 2).float()
     total_dice = 0.0
-    # Compute Dice only for tumor classes (1, 2, 3) -- background is trivially high
     for c in range(1, num_classes):
         p = probs[:, c]
         t = targets_oh[:, c]
         intersection = (p * t).sum()
         total_dice += (2.0 * intersection + smooth) / (p.sum() + t.sum() + smooth)
-    return 1.0 - total_dice / (num_classes - 1)  # 1 - mean_dice
+    return 1.0 - total_dice / (num_classes - 1)
 
 
-# #############################################################################
-# SAFETY CHECKS
-# #############################################################################
 def check_batch_safety(loss_val, logits, model):
     """Returns list of issues (empty = safe)."""
     issues = []
@@ -198,9 +174,6 @@ def check_batch_safety(loss_val, logits, model):
     return issues
 
 
-# #############################################################################
-# TRAIN ONE EPOCH
-# #############################################################################
 def train_one_epoch(model, loader, loss_fn, optimizer, device, cfg, epoch):
     model.train()
     losses = []
@@ -225,7 +198,6 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device, cfg, epoch):
         scaler.step(optimizer)
         scaler.update()
 
-        # Safety
         issues = check_batch_safety(loss, logits, model)
         if issues:
             print(f"\n  [WARNING] {', '.join(issues)}")
@@ -241,9 +213,6 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device, cfg, epoch):
     return np.mean(losses), metrics.get_metrics()
 
 
-# #############################################################################
-# VALIDATE ONE EPOCH
-# #############################################################################
 @torch.no_grad()
 def validate(model, loader, loss_fn, device, collect_roc=False):
     model.eval()
@@ -268,12 +237,8 @@ def validate(model, loader, loss_fn, device, collect_roc=False):
     return np.mean(losses), metrics.get_metrics()
 
 
-# #############################################################################
-# VISUALIZATION
-# #############################################################################
 def plot_confusion_matrix(cm, output_path, class_names=CLASS_NAMES):
     fig, ax = plt.subplots(figsize=(8, 6))
-    # Normalize for display
     cm_norm = cm.astype(float) / (cm.sum(axis=1, keepdims=True) + 1e-8)
     im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
     for i in range(len(class_names)):
@@ -371,9 +336,6 @@ def visualize_preds(model, loader, device, output_path, n=4):
     model.train()
 
 
-# #############################################################################
-# MAIN TRAINING PIPELINE
-# #############################################################################
 def train(quick=False):
     cfg = CONFIG.copy()
     if quick:
@@ -387,7 +349,6 @@ def train(quick=False):
     set_seed(cfg["seed"])
     os.makedirs(cfg["output_dir"], exist_ok=True)
 
-    # Save config
     with open(os.path.join(cfg["output_dir"], "config.json"), "w") as f:
         json.dump(cfg, f, indent=2)
 
@@ -404,11 +365,9 @@ def train(quick=False):
     if device.type == "cpu":
         print("  [NOTE] Training on CPU will be slow. Use GPU for full runs.")
 
-    # --- Data ---
     print("\n--- Data ---")
     train_loader, val_loader, test_loader = prepare_data(cfg, quick=quick)
 
-    # --- Class Weights ---
     print("\n--- Class Weights ---")
     class_counts = count_class_pixels(train_loader)
     for c in range(NUM_CLASSES):
@@ -416,7 +375,6 @@ def train(quick=False):
     rmif_weights = compute_rmif_weights(class_counts, num_classes=NUM_CLASSES, device=device)
     print(f"  RMIF weights: {rmif_weights}")
 
-    # --- Model ---
     print("\n--- Model ---")
     model = get_model(device)
     total_p = sum(p.numel() for p in model.parameters())
@@ -424,26 +382,20 @@ def train(quick=False):
     print(f"  Total params    : {total_p:,}")
     print(f"  Trainable       : {train_p:,} (decoder only, encoder frozen)")
 
-    # --- Loss: RMIF Focal + Dice ---
     loss_fn = get_loss_fn(rmif_weights=rmif_weights, gamma=2.0)
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=cfg["lr"], weight_decay=cfg["weight_decay"]
     )
-    # Cosine Annealing with Warm Restarts: smooth LR decay avoids plateau traps
-    # T_0=10 means first restart at epoch 10, T_mult=2 doubles each cycle
-    # Cycle 1: epochs 1-10, Cycle 2: epochs 11-30, Cycle 3: epochs 31-50+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg["cosine_T0"], T_mult=cfg["cosine_T_mult"]
     )
     early_stop = EarlyStopping(patience=cfg["early_stop_patience"])
 
-    # --- CSV Logger ---
     log_fields = ["epoch", "train_loss", "val_loss", "accuracy", "macro_f1",
                   "weighted_f1", "mean_dice", "tumor_dice", "mean_iou", "lr"]
     csv_log = CSVLogger(os.path.join(cfg["output_dir"], "training_log.csv"), log_fields)
 
-    # --- Training Loop ---
     print("\n" + "=" * 65)
     print("  TRAINING")
     print("=" * 65)
@@ -455,17 +407,14 @@ def train(quick=False):
     for epoch in range(cfg["epochs"]):
         epoch_start = time.time()
 
-        # Unfreeze encoder at the specified epoch
         if epoch == cfg["unfreeze_epoch"]:
             print(f"\n  >>> Epoch {epoch+1}: Unfreezing encoder <<<")
             unfreeze_encoder(model)
-            # Rebuild optimizer with differential LR
             optimizer = torch.optim.Adam([
                 {"params": model.encoder.parameters(), "lr": cfg["lr"] * cfg["encoder_lr_factor"]},
                 {"params": model.decoder.parameters(), "lr": cfg["lr"]},
                 {"params": model.segmentation_head.parameters(), "lr": cfg["lr"]},
             ], weight_decay=cfg["weight_decay"])
-            # Reset cosine schedule for the unfrozen phase
             remaining = cfg["epochs"] - epoch
             scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 optimizer, T_0=min(cfg["cosine_T0"], remaining),
@@ -474,7 +423,6 @@ def train(quick=False):
             tp = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"  Trainable params now: {tp:,}")
 
-        # Train
         train_loss, train_metrics = train_one_epoch(
             model, train_loader, loss_fn, optimizer, device, cfg, epoch
         )
@@ -482,14 +430,11 @@ def train(quick=False):
             print("[ABORT] Training stopped.")
             break
 
-        # Validate
         val_loss, val_metrics = validate(model, val_loader, loss_fn, device)
 
-        # Scheduler step (cosine annealing is epoch-based, not metric-based)
         scheduler.step()
         current_lr = optimizer.param_groups[0]["lr"]
 
-        # Log
         elapsed = time.time() - epoch_start
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
@@ -512,24 +457,20 @@ def train(quick=False):
             "lr": f"{current_lr:.2e}",
         })
 
-        # Print epoch summary
         print(f"\n  Epoch {epoch+1}/{cfg['epochs']}  ({elapsed:.0f}s)  "
               f"LR={current_lr:.2e}")
         print(f"  Train Loss: {train_loss:.4f}  |  Val Loss: {val_loss:.4f}")
         print(f"  Dice: {val_metrics['mean_dice']:.4f} (tumor: {val_metrics['mean_dice_tumor']:.4f})  "
               f"Acc: {val_metrics['accuracy']:.4f}  F1: {val_metrics['macro_f1']:.4f}")
 
-        # Per-class Dice
         for c in range(NUM_CLASSES):
             d = val_metrics["per_class"][c]["dice"]
             print(f"    {CLASS_NAMES[c]:12s}: Dice={d:.4f}")
 
-        # GPU memory
         if device.type == "cuda":
             alloc = torch.cuda.memory_allocated(0) / 1e6
             print(f"  GPU: {alloc:.0f} MB allocated")
 
-        # Early stopping monitors tumor Dice (not val_loss)
         tumor_dice = val_metrics["mean_dice_tumor"]
         improved = early_stop.step(tumor_dice)
         if val_metrics["mean_dice"] > best_dice:
@@ -544,29 +485,24 @@ def train(quick=False):
             }, best_path)
             print(f"  ** Best model saved (Dice={best_dice:.4f}) **")
 
-        # Visualize predictions periodically
         if (epoch + 1) % cfg["viz_every_n"] == 0 or epoch == 0:
             vpath = os.path.join(cfg["output_dir"], f"preds_epoch_{epoch+1:03d}.png")
             visualize_preds(model, val_loader, device, vpath)
             print(f"  Predictions saved -> {vpath}")
 
-        # Early stopping
         if early_stop.should_stop:
             print(f"\n  Early stopping triggered at epoch {epoch+1}")
             break
 
         print("-" * 65)
 
-    # --- Curves ---
     print("\n--- Saving training curves ---")
     plot_curves(dict(history), os.path.join(cfg["output_dir"], "training_curves.png"))
 
-    # --- Test Evaluation ---
     print("\n" + "=" * 65)
     print("  TEST SET EVALUATION")
     print("=" * 65)
 
-    # Load best model
     if os.path.exists(best_path):
         ckpt = torch.load(best_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
@@ -576,17 +512,14 @@ def train(quick=False):
     print(f"\n  Test Loss: {test_loss:.4f}")
     print_metrics(test_metrics)
 
-    # Confusion matrix
     cm_path = os.path.join(cfg["output_dir"], "confusion_matrix.png")
     plot_confusion_matrix(test_metrics["confusion_matrix"], cm_path)
     print(f"\n  Confusion matrix saved -> {cm_path}")
 
-    # Test predictions
     pred_path = os.path.join(cfg["output_dir"], "test_predictions.png")
     visualize_preds(model, test_loader, device, pred_path, n=6)
     print(f"  Test predictions saved -> {pred_path}")
 
-    # Save test results
     results = {
         "test_loss": float(test_loss),
         "accuracy": float(test_metrics["accuracy"]),
@@ -611,9 +544,6 @@ def train(quick=False):
     return history, test_metrics
 
 
-# #############################################################################
-# ENTRY POINT
-# #############################################################################
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Baseline training (Focal+Dice loss)")
     parser.add_argument("--quick", action="store_true",

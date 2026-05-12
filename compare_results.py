@@ -28,7 +28,6 @@ OUT_DIR = os.path.join(OUTPUT_DIR, "comparison")
 
 CLASS_NAMES = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
 
-# Experiment registry
 EXPERIMENTS = {
     "focal_dice": {
         "dir": os.path.join(OUTPUT_DIR, "baseline_focal_dice"),
@@ -82,7 +81,6 @@ def print_comparison_table(loaded):
     sep = "=" * (30 + 15 * len(names))
     lines = [sep, "  COMPARISON TABLE", sep]
 
-    # Header
     header = f"  {'Metric':<25s}"
     for n in names:
         header += f" | {EXPERIMENTS[n]['label']:>12s}"
@@ -98,14 +96,12 @@ def print_comparison_table(loaded):
             vals[n] = v
             row += f" | {v:>12.4f}" if v is not None else f" | {'N/A':>12s}"
 
-        # Find winner (higher is better for all except loss)
         valid = {k: v for k, v in vals.items() if v is not None}
         if valid:
             winner = max(valid, key=valid.get)
             row += f" | {EXPERIMENTS[winner]['label']}"
         lines.append(row)
 
-    # Per-class Dice
     lines.append("")
     header2 = f"  {'Per-Class Dice':<25s}"
     for n in names:
@@ -234,13 +230,11 @@ def main():
         print("    python Code/train_multitask.py")
         return
 
-    # Table
     print()
     table = print_comparison_table(loaded)
     with open(os.path.join(OUT_DIR, "comparison_table.txt"), "w") as f:
         f.write(table)
 
-    # Plots
     print("\n--- Generating plots ---")
     plot_training_curves(logs, os.path.join(OUT_DIR, "comparison_curves.png"))
     plot_bar_chart(loaded, os.path.join(OUT_DIR, "comparison_bar_chart.png"))

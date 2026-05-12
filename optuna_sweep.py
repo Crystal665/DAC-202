@@ -47,9 +47,6 @@ from metrics import SegmentationMetrics
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "outputs")
 
 
-# #############################################################################
-# REPRODUCIBILITY
-# #############################################################################
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -58,9 +55,6 @@ def set_seed(seed=42):
         torch.cuda.manual_seed_all(seed)
 
 
-# #############################################################################
-# DICE LOSS (inlined from train.py for independence)
-# #############################################################################
 def dice_loss(logits, targets, num_classes=NUM_CLASSES, smooth=1.0):
     """Soft Dice Loss averaged over tumor classes (excluding background)."""
     probs = torch.softmax(logits, dim=1)
@@ -74,9 +68,6 @@ def dice_loss(logits, targets, num_classes=NUM_CLASSES, smooth=1.0):
     return 1.0 - total_dice / (num_classes - 1)
 
 
-# #############################################################################
-# DATA PREPARATION (cached across trials to save time)
-# #############################################################################
 _DATA_CACHE = {}
 
 
@@ -127,47 +118,36 @@ def count_class_pixels(loader):
     return counts.tolist()
 
 
-# #############################################################################
-# SINGLE TRIAL OBJECTIVE
-# #############################################################################
 def objective(trial, train_pairs, val_pairs, epochs_per_trial, device):
     """Optuna objective: train for epochs_per_trial, return best tumor Dice."""
 
-    # --- Suggest hyperparameters ---
     lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
     gamma = trial.suggest_float("gamma", 1.0, 4.0)
     unfreeze_epoch = trial.suggest_int("unfreeze_epoch", 2, 8)
     batch_size = trial.suggest_categorical("batch_size", [8, 16, 32])
     weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)
     dice_weight = trial.suggest_float("dice_weight", 0.0, 1.0)
-    encoder_lr_factor = 0.01  # fixed -- matches our pipeline
+    encoder_lr_factor = 0.01
 
-    # --- Data ---
     train_loader, val_loader = build_loaders(train_pairs, val_pairs, batch_size)
 
-    # --- Class weights ---
     class_counts = count_class_pixels(train_loader)
     rmif_weights = compute_rmif_weights(class_counts, num_classes=NUM_CLASSES, device=device)
 
-    # --- Model ---
-    model = get_model(device)  # encoder frozen by default
+    model = get_model(device)
 
-    # --- Loss ---
     focal_fn = get_loss_fn(rmif_weights=rmif_weights, gamma=gamma)
 
-    # --- Optimizer ---
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=lr, weight_decay=weight_decay
     )
 
-    # --- Training ---
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler(enabled=use_amp)
     best_tumor_dice = 0.0
 
     for epoch in range(epochs_per_trial):
-        # Unfreeze encoder at the specified epoch
         if epoch == unfreeze_epoch:
             unfreeze_encoder(model)
             optimizer = torch.optim.Adam([
@@ -176,7 +156,6 @@ def objective(trial, train_pairs, val_pairs, epochs_per_trial, device):
                 {"params": model.segmentation_head.parameters(), "lr": lr},
             ], weight_decay=weight_decay)
 
-        # --- Train one epoch ---
         model.train()
         for images, masks in train_loader:
             images, masks = images.to(device), masks.to(device)
@@ -194,11 +173,9 @@ def objective(trial, train_pairs, val_pairs, epochs_per_trial, device):
             scaler.step(optimizer)
             scaler.update()
 
-            # Abort on NaN
             if torch.isnan(loss):
                 raise optuna.exceptions.TrialPruned()
 
-        # --- Validate ---
         model.eval()
         metrics = SegmentationMetrics()
         with torch.no_grad():
@@ -212,12 +189,10 @@ def objective(trial, train_pairs, val_pairs, epochs_per_trial, device):
         tumor_dice = val_metrics["mean_dice_tumor"]
         best_tumor_dice = max(best_tumor_dice, tumor_dice)
 
-        # --- Pruning ---
         trial.report(tumor_dice, epoch)
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
-    # Cleanup GPU memory
     del model, optimizer, scaler
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -226,9 +201,6 @@ def objective(trial, train_pairs, val_pairs, epochs_per_trial, device):
     return best_tumor_dice
 
 
-# #############################################################################
-# MAIN SWEEP
-# #############################################################################
 def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
     """Run Optuna hyperparameter sweep.
 
@@ -258,11 +230,9 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
     print(f"  Metric         : mean_dice_tumor (maximize)")
     print(f"  Output dir     : {out_dir}")
 
-    # --- Load data (once) ---
     print("\n--- Loading data ---")
     train_pairs, val_pairs, _ = get_data_pairs(quick=quick)
 
-    # --- Create study ---
     sampler = TPESampler(seed=42)
     pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=3)
 
@@ -273,7 +243,6 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
         study_name="brain_tumor_sweep",
     )
 
-    # --- Run optimization ---
     print("\n--- Starting optimization ---\n")
 
     def wrapped_objective(trial):
@@ -286,12 +255,10 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
         gc_after_trial=True,
     )
 
-    # --- Results ---
     print("\n" + "=" * 65)
     print("  SWEEP COMPLETE")
     print("=" * 65)
 
-    # Top 5 trials
     completed = [t for t in study.trials
                  if t.state == optuna.trial.TrialState.COMPLETE]
     completed.sort(key=lambda t: t.value, reverse=True)
@@ -307,7 +274,6 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
               f"{p['batch_size']:<5d} {p['weight_decay']:<10.6f} "
               f"{p.get('dice_weight', 0.5):<8.3f}")
 
-    # --- Save best params ---
     best = study.best_params
     best["best_tumor_dice"] = study.best_value
     best["n_trials"] = n_trials
@@ -320,7 +286,6 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
     print(f"  Best tumor Dice  : {study.best_value:.4f}")
     print(f"  Best params      : {best}")
 
-    # --- Save all trials to CSV ---
     csv_path = os.path.join(out_dir, "optuna_results.csv")
     fields = ["trial_number", "value", "state", "lr", "gamma",
               "unfreeze_epoch", "batch_size", "weight_decay", "dice_weight"]
@@ -339,21 +304,18 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
             writer.writerow(row)
     print(f"  All trials saved -> {csv_path}")
 
-    # --- Plots ---
     try:
         from optuna.visualization.matplotlib import (
             plot_optimization_history,
             plot_param_importances,
         )
 
-        # Optimization history
         fig = plot_optimization_history(study)
         fig.figure.savefig(os.path.join(out_dir, "optuna_history.png"),
                            dpi=150, bbox_inches="tight")
         plt.close("all")
         print(f"  History plot saved -> {out_dir}/optuna_history.png")
 
-        # Parameter importances
         if len(completed) >= 3:
             fig = plot_param_importances(study)
             fig.figure.savefig(os.path.join(out_dir, "optuna_importances.png"),
@@ -371,9 +333,6 @@ def optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False):
     return best
 
 
-# #############################################################################
-# ENTRY POINT
-# #############################################################################
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optuna hyperparameter sweep")
     parser.add_argument("--trials", type=int, default=3,
@@ -387,12 +346,3 @@ if __name__ == "__main__":
                  quick=args.quick)
 
 
-# #############################################################################
-# KAGGLE NOTEBOOK USAGE
-# #############################################################################
-# import os, sys
-# os.environ["DATASET_ROOT"] = "/kaggle/input/datasets/briscdataset/brisc2025/brisc2025"
-# os.environ["OUTPUT_DIR"]   = "/kaggle/working/outputs"
-# sys.path.insert(0, "/kaggle/working/project")
-# from optuna_sweep import optuna_sweep
-# best = optuna_sweep(n_trials=20, epochs_per_trial=10, quick=False)

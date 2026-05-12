@@ -42,7 +42,6 @@ from metrics import SegmentationMetrics, print_metrics
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "outputs")
 
-# Model registry: name -> (checkpoint_path, model_loader)
 MODEL_REGISTRY = {
     "focal_dice": {
         "dir": os.path.join(OUTPUT_DIR, "baseline_focal_dice"),
@@ -65,9 +64,6 @@ MODEL_REGISTRY = {
 }
 
 
-# #############################################################################
-# SURFACE DISTANCE METRICS
-# #############################################################################
 def _surface_distances(pred_binary, gt_binary, spacing=(1.0, 1.0)):
     """Compute surface distances between binary prediction and ground truth.
 
@@ -85,13 +81,11 @@ def _surface_distances(pred_binary, gt_binary, spacing=(1.0, 1.0)):
     pred_b = pred_binary.astype(bool)
     gt_b = gt_binary.astype(bool)
 
-    # Handle edge cases
     if not pred_b.any() and not gt_b.any():
-        return np.array([0.0]), np.array([0.0])  # both empty = perfect
+        return np.array([0.0]), np.array([0.0])
     if not pred_b.any() or not gt_b.any():
-        return None, None  # one empty = undefined
+        return None, None
 
-    # Surface voxels = boundary pixels (eroded XOR original)
     from scipy.ndimage import binary_erosion
     struct = np.ones((3, 3), dtype=bool)
 
@@ -99,15 +93,13 @@ def _surface_distances(pred_binary, gt_binary, spacing=(1.0, 1.0)):
     gt_surface = gt_b ^ binary_erosion(gt_b, structure=struct, border_value=0)
 
     if not pred_surface.any():
-        pred_surface = pred_b  # single-pixel prediction
+        pred_surface = pred_b
     if not gt_surface.any():
         gt_surface = gt_b
 
-    # Distance transform of the complement
     dt_gt = distance_transform_edt(~gt_b, sampling=spacing)
     dt_pred = distance_transform_edt(~pred_b, sampling=spacing)
 
-    # Distances from pred surface to nearest gt surface point
     dist_pred_to_gt = dt_gt[pred_surface]
     dist_gt_to_pred = dt_pred[gt_surface]
 
@@ -152,9 +144,6 @@ def volume_similarity(pred_binary, gt_binary):
     return 1.0 - abs(vp - vg) / (vp + vg)
 
 
-# #############################################################################
-# PER-IMAGE EVALUATION
-# #############################################################################
 def evaluate_image(pred, gt, num_classes=NUM_CLASSES):
     """Compute all metrics for a single image.
 
@@ -170,7 +159,6 @@ def evaluate_image(pred, gt, num_classes=NUM_CLASSES):
         pred_c = (pred == c)
         gt_c = (gt == c)
 
-        # Skip if both are empty (no pixels of this class)
         tp = (pred_c & gt_c).sum()
         fp = (pred_c & ~gt_c).sum()
         fn = (~pred_c & gt_c).sum()
@@ -180,7 +168,6 @@ def evaluate_image(pred, gt, num_classes=NUM_CLASSES):
         precision = tp / (tp + fp + 1e-8) if (tp + fp) > 0 else float("nan")
         recall = tp / (tp + fn + 1e-8) if (tp + fn) > 0 else float("nan")
 
-        # Surface metrics (only if class exists in GT or prediction)
         if gt_c.any() or pred_c.any():
             hd = hausdorff_distance(pred_c, gt_c)
             hd95 = hausdorff_distance_95(pred_c, gt_c)
@@ -198,9 +185,6 @@ def evaluate_image(pred, gt, num_classes=NUM_CLASSES):
     return results
 
 
-# #############################################################################
-# MODEL LOADING
-# #############################################################################
 def load_model(model_info, device):
     """Load a trained model checkpoint."""
     ckpt_path = os.path.join(model_info["dir"], model_info["ckpt"])
@@ -222,9 +206,6 @@ def load_model(model_info, device):
     return model
 
 
-# #############################################################################
-# FULL EVALUATION
-# #############################################################################
 def evaluate_model(model, test_loader, device, model_type="single"):
     """Run full evaluation on test set.
 
@@ -249,7 +230,6 @@ def evaluate_model(model, test_loader, device, model_type="single"):
             img_metrics = evaluate_image(preds[i], masks_np[i])
             all_image_metrics.append(img_metrics)
 
-    # Aggregate across all images
     aggregated = {}
     for c in range(NUM_CLASSES):
         class_metrics = defaultdict(list)
@@ -267,7 +247,6 @@ def evaluate_model(model, test_loader, device, model_type="single"):
                 "n": len(vals),
             }
 
-    # Compute overall (tumor-only) averages
     tumor_metrics = {}
     for key in ["dice", "iou", "hd", "hd95", "asd", "volume_similarity"]:
         vals = []
@@ -283,9 +262,6 @@ def evaluate_model(model, test_loader, device, model_type="single"):
     }
 
 
-# #############################################################################
-# REPORTING
-# #############################################################################
 def print_eval_report(name, results):
     """Print formatted evaluation report."""
     print(f"\n  {'='*70}")
@@ -315,7 +291,6 @@ def print_eval_report(name, results):
 
 def save_eval_results(name, results, out_dir):
     """Save results to JSON."""
-    # Convert numpy types for JSON serialization
     path = os.path.join(out_dir, f"eval_{name}.json")
     with open(path, "w") as f:
         json.dump(results, f, indent=2, default=str)
@@ -331,7 +306,7 @@ def plot_comparison_advanced(all_results, out_dir):
     metrics_to_plot = [
         ("Tumor Dice", "dice", False),
         ("Tumor IoU", "iou", False),
-        ("Tumor HD95 ↓", "hd95", True),  # lower is better
+        ("Tumor HD95 ↓", "hd95", True),
         ("Tumor ASD ↓", "asd", True),
     ]
 
@@ -359,7 +334,6 @@ def plot_comparison_advanced(all_results, out_dir):
     plt.close()
     print(f"  Comparison chart -> {path}")
 
-    # Per-class Dice comparison
     fig, ax = plt.subplots(figsize=(12, 6))
     x = np.arange(NUM_CLASSES)
     width = 0.8 / len(models)
@@ -386,9 +360,6 @@ def plot_comparison_advanced(all_results, out_dir):
     print(f"  Per-class chart -> {path}")
 
 
-# #############################################################################
-# MAIN
-# #############################################################################
 def evaluate_all(model_filter=None, quick=False):
     """Evaluate all (or selected) trained models."""
     out_dir = os.path.join(OUTPUT_DIR, "evaluation")
@@ -401,7 +372,6 @@ def evaluate_all(model_filter=None, quick=False):
     print(f"  Device: {device}")
     print(f"  Metrics: Dice, IoU, HD, HD95, ASD, Volume Similarity")
 
-    # Load test data
     print("\n--- Loading test data ---")
     all_pairs = discover_pairs(DATASET_ROOT)
     test_pairs = [(i, m) for i, m in all_pairs if "test" in i.lower()]
@@ -413,7 +383,6 @@ def evaluate_all(model_filter=None, quick=False):
     test_loader = DataLoader(test_ds, batch_size=8, shuffle=False,
                              num_workers=2, pin_memory=torch.cuda.is_available())
 
-    # Evaluate each model
     all_results = {}
     models_to_eval = [model_filter] if model_filter else list(MODEL_REGISTRY.keys())
 
@@ -442,12 +411,10 @@ def evaluate_all(model_filter=None, quick=False):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # Comparison plots
     if len(all_results) >= 2:
         print("\n--- Generating comparison plots ---")
         plot_comparison_advanced(all_results, out_dir)
 
-    # Summary table
     if all_results:
         print(f"\n{'='*70}")
         print("  SUMMARY")
@@ -475,10 +442,3 @@ if __name__ == "__main__":
     evaluate_all(model_filter=args.model, quick=args.quick)
 
 
-# Kaggle usage:
-# import os, sys
-# os.environ["DATASET_ROOT"] = "/kaggle/input/datasets/briscdataset/brisc2025/brisc2025"
-# os.environ["OUTPUT_DIR"]   = "/kaggle/working/outputs"
-# sys.path.insert(0, "/kaggle/working/project")
-# from evaluate import evaluate_all
-# results = evaluate_all(quick=False)

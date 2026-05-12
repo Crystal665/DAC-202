@@ -37,9 +37,6 @@ from model import get_model, freeze_encoder, unfreeze_encoder
 from loss import compute_rmif_weights
 from metrics import SegmentationMetrics, print_metrics
 
-# #############################################################################
-# CONFIGURATION (same hyperparams as train.py, only loss differs)
-# #############################################################################
 CONFIG = {
     "seed": 42,
     "epochs": 10,
@@ -60,9 +57,6 @@ CONFIG = {
 }
 
 
-# #############################################################################
-# REPRODUCIBILITY
-# #############################################################################
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -73,9 +67,6 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-# #############################################################################
-# EARLY STOPPING (monitors tumor Dice - higher is better)
-# #############################################################################
 class EarlyStopping:
     def __init__(self, patience=15, min_delta=1e-4):
         self.patience = patience
@@ -95,9 +86,6 @@ class EarlyStopping:
         return False
 
 
-# #############################################################################
-# CSV LOGGER
-# #############################################################################
 class CSVLogger:
     def __init__(self, filepath, fieldnames):
         self.filepath = filepath
@@ -110,9 +98,6 @@ class CSVLogger:
             csv.DictWriter(f, self.fieldnames).writerow(row)
 
 
-# #############################################################################
-# DATA PREPARATION
-# #############################################################################
 def prepare_data(cfg, quick=False):
     all_pairs = discover_pairs(DATASET_ROOT)
     train_pairs = [(i, m) for i, m in all_pairs if "train" in i.lower()]
@@ -150,9 +135,6 @@ def count_class_pixels(loader):
     return counts.tolist()
 
 
-# #############################################################################
-# SAFETY CHECKS
-# #############################################################################
 def check_batch_safety(loss_val, logits, model):
     issues = []
     if torch.isnan(loss_val):
@@ -173,9 +155,6 @@ def check_batch_safety(loss_val, logits, model):
     return issues
 
 
-# #############################################################################
-# TRAIN ONE EPOCH (CE loss only -- no Dice component)
-# #############################################################################
 def train_one_epoch(model, loader, loss_fn, optimizer, device, cfg, epoch):
     model.train()
     losses = []
@@ -213,9 +192,6 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device, cfg, epoch):
     return np.mean(losses), metrics.get_metrics()
 
 
-# #############################################################################
-# VALIDATE ONE EPOCH (CE loss only)
-# #############################################################################
 @torch.no_grad()
 def validate(model, loader, loss_fn, device, collect_roc=False):
     model.eval()
@@ -238,9 +214,6 @@ def validate(model, loader, loss_fn, device, collect_roc=False):
     return np.mean(losses), metrics.get_metrics()
 
 
-# #############################################################################
-# VISUALIZATION
-# #############################################################################
 def plot_confusion_matrix(cm, output_path, class_names=CLASS_NAMES):
     fig, ax = plt.subplots(figsize=(8, 6))
     cm_norm = cm.astype(float) / (cm.sum(axis=1, keepdims=True) + 1e-8)
@@ -334,9 +307,6 @@ def visualize_preds(model, loader, device, output_path, n=4):
     model.train()
 
 
-# #############################################################################
-# MAIN TRAINING PIPELINE (Weighted CrossEntropyLoss)
-# #############################################################################
 def train_ce(quick=False):
     cfg = CONFIG.copy()
     if quick:
@@ -364,11 +334,9 @@ def train_ce(quick=False):
     if device.type == "cpu":
         print("  [NOTE] Training on CPU will be slow. Use GPU for full runs.")
 
-    # --- Data ---
     print("\n--- Data ---")
     train_loader, val_loader, test_loader = prepare_data(cfg, quick=quick)
 
-    # --- Class Weights ---
     print("\n--- Class Weights ---")
     class_counts = count_class_pixels(train_loader)
     for c in range(NUM_CLASSES):
@@ -376,7 +344,6 @@ def train_ce(quick=False):
     rmif_weights = compute_rmif_weights(class_counts, num_classes=NUM_CLASSES, device=device)
     print(f"  CE weights (from RMIF): {rmif_weights}")
 
-    # --- Model ---
     print("\n--- Model ---")
     model = get_model(device)
     total_p = sum(p.numel() for p in model.parameters())
@@ -384,7 +351,6 @@ def train_ce(quick=False):
     print(f"  Total params    : {total_p:,}")
     print(f"  Trainable       : {train_p:,} (decoder only, encoder frozen)")
 
-    # --- Loss: Standard Weighted CrossEntropyLoss ---
     loss_fn = torch.nn.CrossEntropyLoss(weight=rmif_weights)
     print(f"  Loss: nn.CrossEntropyLoss(weight={[f'{w:.4f}' for w in rmif_weights.tolist()]})")
 
@@ -401,7 +367,6 @@ def train_ce(quick=False):
                   "weighted_f1", "mean_dice", "tumor_dice", "mean_iou", "lr"]
     csv_log = CSVLogger(os.path.join(cfg["output_dir"], "training_log.csv"), log_fields)
 
-    # --- Training Loop ---
     print("\n" + "=" * 65)
     print("  TRAINING (Weighted CE)")
     print("=" * 65)
@@ -413,7 +378,6 @@ def train_ce(quick=False):
     for epoch in range(cfg["epochs"]):
         epoch_start = time.time()
 
-        # Unfreeze encoder
         if epoch == cfg["unfreeze_epoch"]:
             print(f"\n  >>> Epoch {epoch+1}: Unfreezing encoder <<<")
             unfreeze_encoder(model)
@@ -430,7 +394,6 @@ def train_ce(quick=False):
             tp = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"  Trainable params now: {tp:,}")
 
-        # Train
         train_loss, train_metrics = train_one_epoch(
             model, train_loader, loss_fn, optimizer, device, cfg, epoch
         )
@@ -438,7 +401,6 @@ def train_ce(quick=False):
             print("[ABORT] Training stopped.")
             break
 
-        # Validate
         val_loss, val_metrics = validate(model, val_loader, loss_fn, device)
 
         scheduler.step()
@@ -505,11 +467,9 @@ def train_ce(quick=False):
 
         print("-" * 65)
 
-    # --- Curves ---
     print("\n--- Saving training curves ---")
     plot_curves(dict(history), os.path.join(cfg["output_dir"], "training_curves.png"))
 
-    # --- Test Evaluation ---
     print("\n" + "=" * 65)
     print("  TEST SET EVALUATION (Weighted CE)")
     print("=" * 65)
@@ -555,9 +515,6 @@ def train_ce(quick=False):
     return history, test_metrics
 
 
-# #############################################################################
-# ENTRY POINT
-# #############################################################################
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Baseline training with Weighted CrossEntropyLoss")

@@ -40,9 +40,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-# ---------------------------------------------------------------------------
-# Import from project modules (same Code/ directory)
-# ---------------------------------------------------------------------------
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dataset import (
@@ -54,29 +52,22 @@ from model import get_model, predict_mask, freeze_encoder, unfreeze_encoder
 from loss import compute_rmif_weights, get_loss_fn
 
 
-# #############################################################################
-# DEBUG CONFIGURATION
-# #############################################################################
 DEBUG_CFG = {
-    "num_train":     40,       # images for debug training (20-50 range)
-    "num_val":       10,       # images for debug validation
-    "overfit_count": 5,        # images for overfitting test
-    "epochs":        5,        # debug epochs (3-5)
-    "batch_size":    4,        # small batch for speed
-    "lr":            1e-3,     # learning rate (decoder-only, so can be higher)
-    "num_workers":   0,        # 0 for debug (avoids multiprocess issues)
+    "num_train":     40,
+    "num_val":       10,
+    "overfit_count": 5,
+    "epochs":        5,
+    "batch_size":    4,
+    "lr":            1e-3,
+    "num_workers":   0,
     "seed":          42,
     "output_dir":    "outputs/debug",
 }
 
-# Loss safety thresholds
-MAX_LOSS_THRESHOLD = 50.0      # flag if loss exceeds this
-MIN_DICE_AFTER_3   = 0.01     # flag if Dice is still 0 after epoch 3
+MAX_LOSS_THRESHOLD = 50.0
+MIN_DICE_AFTER_3   = 0.01
 
 
-# #############################################################################
-# REPRODUCIBILITY
-# #############################################################################
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -85,9 +76,6 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-# #############################################################################
-# METRICS: DICE SCORE & IOU (per-class)
-# #############################################################################
 def compute_dice_iou(preds, targets, num_classes=NUM_CLASSES, smooth=1e-6):
     """
     Compute per-class Dice and IoU between predicted and GT masks.
@@ -112,9 +100,7 @@ def compute_dice_iou(preds, targets, num_classes=NUM_CLASSES, smooth=1e-6):
         intersection = (pred_c * true_c).sum()
         union = pred_c.sum() + true_c.sum() - intersection
 
-        # Dice = 2 * |A & B| / (|A| + |B|)
         dice = (2.0 * intersection + smooth) / (pred_c.sum() + true_c.sum() + smooth)
-        # IoU  = |A & B| / |A | B|
         iou = (intersection + smooth) / (union + smooth)
 
         dice_per_class[c] = dice.item()
@@ -123,9 +109,6 @@ def compute_dice_iou(preds, targets, num_classes=NUM_CLASSES, smooth=1e-6):
     return dice_per_class, iou_per_class
 
 
-# #############################################################################
-# TENSOR SANITY CHECKS
-# #############################################################################
 def check_tensors(images, masks, batch_idx=0):
     """
     Print and verify tensor shapes, dtypes, and value ranges.
@@ -139,7 +122,6 @@ def check_tensors(images, masks, batch_idx=0):
     """
     print("\n--- Tensor Sanity Check (batch {}) ---".format(batch_idx))
 
-    # Image checks
     print(f"  Image shape : {images.shape}  (expected: (B, 3, 256, 256))")
     print(f"  Image dtype : {images.dtype}  (expected: float32)")
     print(f"  Image min   : {images.min().item():.4f}")
@@ -149,7 +131,6 @@ def check_tensors(images, masks, batch_idx=0):
     assert images.dtype == torch.float32, f"Image dtype must be float32, got {images.dtype}"
     assert not torch.isnan(images).any(), "NaN detected in image tensor!"
 
-    # Mask checks
     print(f"  Mask shape  : {masks.shape}  (expected: (B, 256, 256))")
     print(f"  Mask dtype  : {masks.dtype}  (expected: int64)")
     unique_vals = torch.unique(masks).tolist()
@@ -164,9 +145,6 @@ def check_tensors(images, masks, batch_idx=0):
     print("  [OK] All tensor checks passed!")
 
 
-# #############################################################################
-# SAFETY CHECKS (called every batch)
-# #############################################################################
 def check_safety(loss_val, logits, model, epoch, batch_idx):
     """
     Detect training pathologies early:
@@ -178,7 +156,6 @@ def check_safety(loss_val, logits, model, epoch, batch_idx):
     """
     issues = []
 
-    # 1. Loss checks
     if torch.isnan(loss_val):
         issues.append("[CRITICAL] Loss is NaN!")
     elif torch.isinf(loss_val):
@@ -186,24 +163,21 @@ def check_safety(loss_val, logits, model, epoch, batch_idx):
     elif loss_val.item() > MAX_LOSS_THRESHOLD:
         issues.append(f"[WARNING] Loss = {loss_val.item():.2f} > {MAX_LOSS_THRESHOLD} (exploding?)")
 
-    # 2. Logit checks
     if torch.isnan(logits).any():
         issues.append("[CRITICAL] NaN detected in model logits!")
     if logits.abs().max() > 1000:
         issues.append(f"[WARNING] Logit magnitude = {logits.abs().max().item():.1f} (very large)")
 
-    # 3. Dead prediction check
-    preds = torch.argmax(logits, dim=1)  # (B, H, W)
+    preds = torch.argmax(logits, dim=1)
     unique_preds = torch.unique(preds)
     if len(unique_preds) == 1:
         issues.append(f"[WARNING] Dead predictions: all pixels = class {unique_preds[0].item()}")
 
-    # 4. Gradient NaN check
     for name, param in model.named_parameters():
         if param.requires_grad and param.grad is not None:
             if torch.isnan(param.grad).any():
                 issues.append(f"[CRITICAL] NaN gradient in: {name}")
-                break  # one is enough to flag
+                break
 
     if issues:
         print(f"\n  ** SAFETY ISSUES at epoch {epoch+1}, batch {batch_idx} **")
@@ -211,13 +185,10 @@ def check_safety(loss_val, logits, model, epoch, batch_idx):
             print(f"    {issue}")
         if any("[CRITICAL]" in i for i in issues):
             print("    Stopping training due to critical issue!")
-            return False  # signal to stop
-    return True  # safe to continue
+            return False
+    return True
 
 
-# #############################################################################
-# PIXEL COUNT COMPUTATION (for RMIF weights from debug subset)
-# #############################################################################
 def count_class_pixels(loader, num_classes=NUM_CLASSES):
     """
     Count total pixels per class across the entire DataLoader.
@@ -230,9 +201,6 @@ def count_class_pixels(loader, num_classes=NUM_CLASSES):
     return counts.tolist()
 
 
-# #############################################################################
-# VISUALIZATION
-# #############################################################################
 def visualize_predictions(model, loader, device, epoch, output_dir, num_samples=3):
     """
     Save a figure showing input channels, GT mask, and predicted mask
@@ -253,7 +221,6 @@ def visualize_predictions(model, loader, device, epoch, output_dir, num_samples=
         probs = torch.softmax(logits, dim=1)
         preds = torch.argmax(probs, dim=1).cpu()
 
-    # Denormalize for display
     mean = torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1)
     std = torch.tensor(IMAGENET_STD).view(1, 3, 1, 1)
     images_denorm = images.cpu() * std + mean
@@ -269,22 +236,18 @@ def visualize_predictions(model, loader, device, epoch, output_dir, num_samples=
         ax.set_title(title, fontsize=12, fontweight="bold")
 
     for i in range(num_samples):
-        # 3 input channels
         for ch in range(3):
             axes[i][ch].imshow(images_denorm[i, ch].numpy(), cmap="gray")
             axes[i][ch].axis("off")
 
-        # GT mask (colorized)
         gt_colored = _colorize(masks[i].numpy())
         axes[i][3].imshow(gt_colored)
         axes[i][3].axis("off")
 
-        # Predicted mask (colorized)
         pred_colored = _colorize(preds[i].numpy())
         axes[i][4].imshow(pred_colored)
         axes[i][4].axis("off")
 
-    # Legend
     patches = [mpatches.Patch(color=np.array(CLASS_COLORS_RGB[c]) / 255.0,
                               label=CLASS_NAMES[c]) for c in range(NUM_CLASSES)]
     fig.legend(handles=patches, loc="lower center", ncol=4, fontsize=10,
@@ -307,9 +270,6 @@ def _colorize(mask_np):
     return colored
 
 
-# #############################################################################
-# DEBUG TRAINING LOOP
-# #############################################################################
 def debug_train(overfit_mode=False):
     """
     Run a lightweight debug training session.
@@ -326,8 +286,8 @@ def debug_train(overfit_mode=False):
     cfg = DEBUG_CFG.copy()
     if overfit_mode:
         cfg["num_train"] = cfg["overfit_count"]
-        cfg["num_val"] = cfg["overfit_count"]  # validate on same images
-        cfg["epochs"] = 10    # more epochs to prove memorization
+        cfg["num_val"] = cfg["overfit_count"]
+        cfg["epochs"] = 10
         cfg["output_dir"] = "outputs/debug_overfit"
         print("=" * 60)
         print("  OVERFITTING TEST MODE")
@@ -349,9 +309,6 @@ def debug_train(overfit_mode=False):
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
         print(f"  Memory: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
 
-    # -----------------------------------------------------------------------
-    # 1. DATA: small subset
-    # -----------------------------------------------------------------------
     print("\n--- Loading data (small subset) ---")
     all_pairs = discover_pairs(DATASET_ROOT)
 
@@ -360,10 +317,8 @@ def debug_train(overfit_mode=False):
     val_pairs = all_pairs[cfg["num_train"]:cfg["num_train"] + cfg["num_val"]]
 
     if overfit_mode:
-        # Validate on the same images we train on (to test memorization)
         val_pairs = train_pairs[:cfg["overfit_count"]]
 
-    # Use val transforms for debug (minimal augmentation for faster, deterministic runs)
     train_dataset = BRISCDataset(train_pairs, transform=get_val_transforms())
     val_dataset = BRISCDataset(val_pairs, transform=get_val_transforms())
 
@@ -380,16 +335,10 @@ def debug_train(overfit_mode=False):
     print(f"  Val samples  : {len(val_dataset)}")
     print(f"  Batch size   : {cfg['batch_size']}")
 
-    # -----------------------------------------------------------------------
-    # 2. TENSOR SANITY CHECK (first batch)
-    # -----------------------------------------------------------------------
     print("\n--- Initial tensor sanity check ---")
     first_images, first_masks = next(iter(train_loader))
     check_tensors(first_images, first_masks, batch_idx=0)
 
-    # -----------------------------------------------------------------------
-    # 3. COMPUTE RMIF WEIGHTS from debug subset
-    # -----------------------------------------------------------------------
     print("\n--- Computing RMIF class weights ---")
     class_counts = count_class_pixels(train_loader)
     for c in range(NUM_CLASSES):
@@ -399,9 +348,6 @@ def debug_train(overfit_mode=False):
     print(f"  RMIF weights: {rmif_weights}")
     print(f"  Weights sum : {rmif_weights.sum().item():.4f}")
 
-    # -----------------------------------------------------------------------
-    # 4. MODEL + LOSS + OPTIMIZER
-    # -----------------------------------------------------------------------
     print("\n--- Building model ---")
     model = get_model(device)
 
@@ -417,9 +363,6 @@ def debug_train(overfit_mode=False):
         lr=cfg["lr"],
     )
 
-    # -----------------------------------------------------------------------
-    # 5. FORWARD PASS CHECK
-    # -----------------------------------------------------------------------
     print("\n--- Forward pass check ---")
     test_imgs = first_images[:2].to(device)
     test_logits = model(test_imgs)
@@ -431,9 +374,6 @@ def debug_train(overfit_mode=False):
         f"Shape mismatch! Got {test_logits.shape}"
     print("  [OK] Forward pass shape verified!")
 
-    # -----------------------------------------------------------------------
-    # 6. TRAINING LOOP
-    # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("  TRAINING")
     print("=" * 60)
@@ -443,7 +383,6 @@ def debug_train(overfit_mode=False):
     for epoch in range(cfg["epochs"]):
         epoch_start = time.time()
 
-        # --- Train ---
         model.train()
         train_losses = []
         batch_count = 0
@@ -457,7 +396,6 @@ def debug_train(overfit_mode=False):
             loss = loss_fn(logits, masks)
             loss.backward()
 
-            # Safety check (every batch)
             safe = check_safety(loss, logits, model, epoch, batch_idx)
             if not safe:
                 print("\n[ABORT] Training stopped due to critical safety issue.")
@@ -467,7 +405,6 @@ def debug_train(overfit_mode=False):
             train_losses.append(loss.item())
             batch_count += 1
 
-            # Per-batch logging
             if batch_count <= 3 or batch_count % 5 == 0:
                 preds_quick = torch.argmax(logits.detach(), dim=1)
                 unique_preds = torch.unique(preds_quick).tolist()
@@ -479,7 +416,6 @@ def debug_train(overfit_mode=False):
         avg_train_loss = np.mean(train_losses)
         history["train_loss"].append(avg_train_loss)
 
-        # --- Validate ---
         model.eval()
         val_losses = []
         all_dice = defaultdict(list)
@@ -512,7 +448,6 @@ def debug_train(overfit_mode=False):
 
         elapsed = time.time() - epoch_start
 
-        # --- Epoch summary ---
         print(f"\n{'='*60}")
         print(f"  Epoch {epoch+1}/{cfg['epochs']} Summary  ({elapsed:.1f}s)")
         print(f"  Train Loss : {avg_train_loss:.4f}")
@@ -524,34 +459,26 @@ def debug_train(overfit_mode=False):
         for c in range(NUM_CLASSES):
             print(f"    {CLASS_NAMES[c]:12s}: Dice={mean_dice[c]:.4f}  IoU={mean_iou[c]:.4f}")
 
-        # GPU memory
         if device.type == "cuda":
             mem_alloc = torch.cuda.memory_allocated(0) / 1e6
             mem_reserved = torch.cuda.memory_reserved(0) / 1e6
             print(f"  GPU Memory : {mem_alloc:.0f} MB allocated, {mem_reserved:.0f} MB reserved")
 
-        # LR
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"  LR         : {current_lr:.6f}")
 
-        # Dead prediction warning
         if avg_dice < MIN_DICE_AFTER_3 and epoch >= 2:
             print(f"  [WARNING] Dice is still < {MIN_DICE_AFTER_3} after {epoch+1} epochs!")
             print(f"            Model may be predicting all-background.")
 
         print(f"{'='*60}")
 
-        # --- Visualization ---
         visualize_predictions(model, val_loader, device, epoch, cfg["output_dir"])
 
-    # -----------------------------------------------------------------------
-    # 7. FINAL REPORT
-    # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
     print("  DEBUG TRAINING COMPLETE")
     print("-" * 60)
 
-    # Did loss decrease?
     loss_decreased = history["train_loss"][-1] < history["train_loss"][0]
     dice_increased = history["val_dice"][-1] > history["val_dice"][0]
 
@@ -588,7 +515,6 @@ def debug_train(overfit_mode=False):
             print(f"           - Check loss function")
             print(f"           - Check data pipeline")
 
-    # Save loss curve
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     epochs_range = range(1, len(history["train_loss"]) + 1)
 
@@ -618,9 +544,6 @@ def debug_train(overfit_mode=False):
     return history
 
 
-# #############################################################################
-# MAIN
-# #############################################################################
 if __name__ == "__main__":
     import argparse
 

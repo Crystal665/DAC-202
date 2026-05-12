@@ -44,15 +44,9 @@ Output:
 import torch
 import torch.nn.functional as F
 
-# Retained for documentation: F.log_softmax is already numerically safe
-# and never produces -inf for finite logits, so eps is not used in the
-# log computation. Kept here as a named constant for reference only.
 eps = 1e-8
 
 
-# #############################################################################
-# PART 1: RMIF WEIGHT COMPUTATION
-# #############################################################################
 def compute_rmif_weights(class_pixel_counts, num_classes=4, device="cpu"):
     """
     Compute Root Mean Inverse Frequency (RMIF) class weights.
@@ -78,24 +72,17 @@ def compute_rmif_weights(class_pixel_counts, num_classes=4, device="cpu"):
 
     N_total = counts.sum()
 
-    # RMIF formula: w_c = sqrt(N_total) / (C * sqrt(N_c))
     weights = torch.sqrt(N_total) / (num_classes * torch.sqrt(counts))
 
-    # (a) Normalize so weights sum to num_classes (training stability)
     weights = weights * (num_classes / weights.sum())
 
-    # (b) Clip to max 10.0 (guard against extreme values for rare classes)
     weights = torch.clamp(weights, max=10.0)
 
-    # Cast and move to device
     weights = weights.to(dtype=torch.float32, device=device)
 
     return weights
 
 
-# #############################################################################
-# PART 2: MULTICLASS FOCAL LOSS WITH RMIF ALPHA
-# #############################################################################
 def get_loss_fn(rmif_weights, gamma=2.0):
     """
     Build a Multiclass Focal Loss function with RMIF alpha weighting.
@@ -113,7 +100,6 @@ def get_loss_fn(rmif_weights, gamma=2.0):
     Returns:
         loss_fn(logits, targets) -> scalar tensor
     """
-    # Capture weights in closure (they won't change during training)
     _weights = rmif_weights.clone()
     _gamma = gamma
 
@@ -128,34 +114,24 @@ def get_loss_fn(rmif_weights, gamma=2.0):
         Returns:
             scalar loss tensor (mean reduction)
         """
-        # Step 1: Compute log-probs and probs via log_softmax (numerically stable)
-        # Do NOT use softmax + torch.log separately
-        log_probs = F.log_softmax(logits, dim=1)   # (B, C, H, W)
-        probs = log_probs.exp()                     # (B, C, H, W)
+        log_probs = F.log_softmax(logits, dim=1)
+        probs = log_probs.exp()
 
-        # Step 2: Gather log_p_t and p_t for the ground-truth class at each pixel
-        targets_unsqueezed = targets.unsqueeze(1)          # (B, 1, H, W)
-        log_p_t = log_probs.gather(dim=1, index=targets_unsqueezed).squeeze(1)  # (B, H, W)
-        p_t = probs.gather(dim=1, index=targets_unsqueezed).squeeze(1)          # (B, H, W)
+        targets_unsqueezed = targets.unsqueeze(1)
+        log_p_t = log_probs.gather(dim=1, index=targets_unsqueezed).squeeze(1)
+        p_t = probs.gather(dim=1, index=targets_unsqueezed).squeeze(1)
 
-        # Step 3: Gather alpha (RMIF weight) per pixel from targets
-        alpha_t = _weights[targets]   # (B, H, W)
+        alpha_t = _weights[targets]
 
-        # Step 4: Compute focal weight
-        focal_weight = (1.0 - p_t) ** _gamma   # (B, H, W)
+        focal_weight = (1.0 - p_t) ** _gamma
 
-        # Step 5: Compute per-pixel loss
-        loss = -alpha_t * focal_weight * log_p_t   # (B, H, W)
+        loss = -alpha_t * focal_weight * log_p_t
 
-        # Step 6: Reduce (mean over all pixels in the batch)
         return loss.mean()
 
     return loss_fn
 
 
-# #############################################################################
-# PART 5: SANITY CHECK
-# #############################################################################
 if __name__ == "__main__":
     print("=" * 60)
     print("  loss.py - Multiclass Focal Loss + RMIF Sanity Check")
@@ -164,7 +140,6 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nDevice: {device}")
 
-    # --- Check 1: RMIF weight properties ---
     print("\n--- Check 1: RMIF weight properties ---")
     class_counts = [250_000_000, 15_000_000, 10_000_000, 12_000_000]
     weights = compute_rmif_weights(class_counts, num_classes=4, device=device)
@@ -182,7 +157,6 @@ if __name__ == "__main__":
     assert (weights[1:] > weights[0]).all(),             "Tumor weights > background weight"
     print("  All weight assertions passed!")
 
-    # --- Check 2: Loss function output properties ---
     print("\n--- Check 2: Loss function output properties ---")
     loss_fn = get_loss_fn(rmif_weights=weights, gamma=2.0)
 
@@ -197,15 +171,14 @@ if __name__ == "__main__":
     assert not torch.isinf(loss), "Loss must not be Inf"
     print("  All loss property assertions passed!")
 
-    # --- Check 3: Loss is higher for wrong predictions ---
     print("\n--- Check 3: Loss direction (wrong > correct) ---")
     bad_logits = torch.zeros(2, 4, 256, 256).to(device)
-    bad_logits[:, 0, :, :] = 10.0                          # strongly predicts background
+    bad_logits[:, 0, :, :] = 10.0
     tumor_targets = torch.ones(2, 256, 256, dtype=torch.long).to(device)
     bad_loss = loss_fn(bad_logits, tumor_targets)
 
     good_logits = torch.zeros(2, 4, 256, 256).to(device)
-    good_logits[:, 1, :, :] = 10.0                         # strongly predicts class 1 (correct)
+    good_logits[:, 1, :, :] = 10.0
     good_loss = loss_fn(good_logits, tumor_targets)
 
     print(f"Bad  loss (wrong class predicted)  : {bad_loss.item():.4f}")
@@ -214,14 +187,13 @@ if __name__ == "__main__":
         "Loss must be higher when predictions are wrong"
     print("  Loss direction assertion passed!")
 
-    # --- Check 4: Focal effect ---
     print("\n--- Check 4: Focal effect (confident < uncertain) ---")
     confident_correct = torch.zeros(2, 4, 256, 256).to(device)
-    confident_correct[:, 1, :, :] = 100.0    # near-certain correct prediction
+    confident_correct[:, 1, :, :] = 100.0
     confident_loss = loss_fn(confident_correct, tumor_targets)
 
     uncertain_correct = torch.zeros(2, 4, 256, 256).to(device)
-    uncertain_correct[:, 1, :, :] = 0.1      # barely correct prediction
+    uncertain_correct[:, 1, :, :] = 0.1
     uncertain_loss = loss_fn(uncertain_correct, tumor_targets)
 
     print(f"Confident correct loss : {confident_loss.item():.6f}  (expected ~= 0)")
