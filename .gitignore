@@ -1,0 +1,66 @@
+# Dataset (large ~250MB)
+archive/
+archive.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Training outputs (regenerable)
+outputs/
+
+# Model checkpoints
+*.pth
+*.pt
+*.onnx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# Temporary / scratch
+*.tmp
+*.bak
+*.log
+
+# Root-level output files (regenerable)
+test_predictions.png
+test_results.json
+training_curves.png
+
+# Images not part of codebase
+WhatsApp*.jpeg
+
+# Documents / reports (kept separately or in Overleaf)
+*.pdf
+*.docx
+project_outline.md
+survey paper/
+
+# Eval results (empty or regenerable)
+Eval results/
+
+# Utility script (not part of pipeline)
+Code/remove_comments.py
+
+# Gemini / AI assistant metadata
+.gemini/

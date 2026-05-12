@@ -234,21 +234,7 @@ Input (3, 256, 256)
 
 ---
 
-## Output Files
 
-Each experiment generates:
-
-| File | Description |
-|---|---|
-| `config.json` | Full hyperparameter config |
-| `training_log.csv` | Per-epoch metrics |
-| `training_curves.png` | Loss, Dice, F1, LR curves |
-| `confusion_matrix.png` | Normalised confusion matrix |
-| `test_predictions.png` | Input → GT → Prediction |
-| `test_results.json` | All test metrics (JSON) |
-| `best_model.pth` | Best checkpoint (by Dice) |
-
----
 
 ## References
 
