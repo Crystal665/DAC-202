@@ -40,15 +40,16 @@ CONFIG = {
     "epochs": 50,
     "batch_size": 16,
     "lr": 1e-3,
-    "encoder_lr_factor": 0.1,
+    "encoder_lr_factor": 0.01,    # 100x lower LR for encoder (was 0.1)
     "unfreeze_epoch": 5,
     "weight_decay": 1e-4,
-    "scheduler_patience": 5,
+    "scheduler_patience": 7,
     "scheduler_factor": 0.5,
-    "early_stop_patience": 10,
+    "early_stop_patience": 15,    # more patience (was 10)
     "grad_clip_norm": 1.0,
     "val_split": 0.1,
     "num_workers": 2,
+    "dice_loss_weight": 0.5,      # combined loss = focal + 0.5 * dice_loss
     "output_dir": "outputs/baseline",
     "viz_every_n": 5,
 }
@@ -68,19 +69,22 @@ def set_seed(seed):
 
 
 # #############################################################################
-# EARLY STOPPING
+# EARLY STOPPING (monitors tumor Dice - higher is better)
 # #############################################################################
 class EarlyStopping:
-    def __init__(self, patience=10, min_delta=1e-4):
+    """Monitor tumor Dice (higher=better) instead of val_loss.
+    Val_loss is dominated by background pixels and can increase even while
+    tumor segmentation improves. Tumor Dice directly measures what we care about."""
+    def __init__(self, patience=15, min_delta=1e-4):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
-        self.best_loss = None
+        self.best_score = None
         self.should_stop = False
 
-    def step(self, val_loss):
-        if self.best_loss is None or val_loss < self.best_loss - self.min_delta:
-            self.best_loss = val_loss
+    def step(self, tumor_dice):
+        if self.best_score is None or tumor_dice > self.best_score + self.min_delta:
+            self.best_score = tumor_dice
             self.counter = 0
             return True  # improved
         self.counter += 1
@@ -151,6 +155,26 @@ def count_class_pixels(loader):
 
 
 # #############################################################################
+# DICE LOSS (complements Focal Loss for direct spatial overlap optimization)
+# #############################################################################
+def dice_loss(logits, targets, num_classes=NUM_CLASSES, smooth=1.0):
+    """Soft Dice Loss averaged over classes (excluding background).
+    Focal Loss optimizes per-pixel classification but doesn't directly
+    maximize spatial overlap. Dice Loss fills that gap by pushing the model
+    to produce contiguous, correctly-shaped tumor regions."""
+    probs = torch.softmax(logits, dim=1)  # (B, C, H, W)
+    targets_oh = F.one_hot(targets, num_classes).permute(0, 3, 1, 2).float()  # (B, C, H, W)
+    total_dice = 0.0
+    # Compute Dice only for tumor classes (1, 2, 3) -- background is trivially high
+    for c in range(1, num_classes):
+        p = probs[:, c]
+        t = targets_oh[:, c]
+        intersection = (p * t).sum()
+        total_dice += (2.0 * intersection + smooth) / (p.sum() + t.sum() + smooth)
+    return 1.0 - total_dice / (num_classes - 1)  # 1 - mean_dice
+
+
+# #############################################################################
 # SAFETY CHECKS
 # #############################################################################
 def check_batch_safety(loss_val, logits, model):
@@ -190,7 +214,9 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device, cfg, epoch):
 
         with torch.amp.autocast(device_type=device.type, enabled=use_amp):
             logits = model(images)
-            loss = loss_fn(logits, masks)
+            focal = loss_fn(logits, masks)
+            dl = dice_loss(logits, masks)
+            loss = focal + cfg.get("dice_loss_weight", 0.5) * dl
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -227,7 +253,9 @@ def validate(model, loader, loss_fn, device, collect_roc=False):
     for images, masks in tqdm(loader, desc="  Val", leave=False):
         images, masks = images.to(device), masks.to(device)
         logits = model(images)
-        loss = loss_fn(logits, masks)
+        focal = loss_fn(logits, masks)
+        dl = dice_loss(logits, masks)
+        loss = focal + 0.5 * dl
         losses.append(loss.item())
 
         preds = torch.argmax(logits, dim=1)
@@ -494,8 +522,9 @@ def train(quick=False):
             alloc = torch.cuda.memory_allocated(0) / 1e6
             print(f"  GPU: {alloc:.0f} MB allocated")
 
-        # Save best model
-        improved = early_stop.step(val_loss)
+        # Early stopping monitors tumor Dice (not val_loss)
+        tumor_dice = val_metrics["mean_dice_tumor"]
+        improved = early_stop.step(tumor_dice)
         if val_metrics["mean_dice"] > best_dice:
             best_dice = val_metrics["mean_dice"]
             torch.save({
