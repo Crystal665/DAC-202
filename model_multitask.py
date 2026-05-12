@@ -102,7 +102,7 @@ class DualHeadUNet(nn.Module):
         features = self.encoder(x)
 
         # Segmentation head: decoder + final conv
-        decoder_out = self.decoder(*features)
+        decoder_out = self.decoder(features)
         seg_logits = self.segmentation_head(decoder_out)
 
         # Classification head: use deepest encoder features (last element)
