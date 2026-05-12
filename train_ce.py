@@ -42,7 +42,7 @@ from metrics import SegmentationMetrics, print_metrics
 # #############################################################################
 CONFIG = {
     "seed": 42,
-    "epochs": 50,
+    "epochs": 10,
     "batch_size": 16,
     "lr": 1e-3,
     "encoder_lr_factor": 0.01,
