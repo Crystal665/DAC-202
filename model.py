@@ -1,12 +1,18 @@
 """
-model.py - UNet + EfficientNet-B4 Segmentation Model
+model.py - UNet + EfficientNet-B4 Segmentation Model (with SCSE Attention)
 Brain Tumor Segmentation - BRISC 2025 Dataset
 
 Architecture:
     - Encoder: EfficientNet-B4 (ImageNet pretrained)
-    - Decoder: UNet
+    - Decoder: UNet with SCSE (Spatial & Channel Squeeze-Excitation) attention
     - Input:   (B, 3, 256, 256) float32 - [gray, clahe, sobel_edges]
     - Output:  (B, 4, 256, 256) raw logits (NO softmax)
+
+SCSE Attention:
+    Each skip connection learns which spatial locations AND which feature
+    channels are important, suppressing irrelevant background noise before
+    it reaches the decoder. This reduces false positives on healthy tissue
+    with zero extra training cost.
 
 Classes:
     0 = No Tumor (background)
@@ -45,7 +51,7 @@ CLASS_NAMES = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
 # #############################################################################
 def get_model(device):
     """
-    Instantiate UNet with EfficientNet-B4 encoder and move to device.
+    Instantiate UNet with EfficientNet-B4 encoder + SCSE attention decoder.
     Encoder is frozen by default (for the first 5 epochs).
 
     Args:
@@ -59,7 +65,8 @@ def get_model(device):
         encoder_weights=ENCODER_WEIGHTS,
         in_channels=IN_CHANNELS,
         classes=NUM_CLASSES,
-        activation=None,   # raw logits - NO softmax
+        activation=None,              # raw logits - NO softmax
+        decoder_attention_type="scse", # Spatial & Channel Squeeze-Excitation
     )
 
     model = model.to(device)
